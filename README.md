@@ -50,8 +50,23 @@ Bootstrap all secrets in one step from the `mrsimpson/homelab` repo:
 ./scripts/setup-homelab-apps.sh
 ```
 
+## Agent skills
+
+This repo ships [agentskills.io](https://agentskills.io)-compatible skills under `skills/`.
+Load them in your AI agent to deploy and configure apps without reading documentation manually.
+
+| Skill | When to use |
+|-------|-------------|
+| [`deploy-homelab-app`](https://github.com/mrsimpson/homelab/tree/main/skills/deploy-homelab-app/SKILL.md) | Add a new app end-to-end (scaffold → RBAC → CI) — lives in the homelab infra repo |
+| [`add-app-with-database`](./skills/add-app-with-database/SKILL.md) | App needs a PostgreSQL database (CNPG) |
+| [`add-app-with-oauth`](./skills/add-app-with-oauth/SKILL.md) | Protect an app with GitHub OAuth (oauth2-proxy) |
+| [`add-app-with-secrets`](./skills/add-app-with-secrets/SKILL.md) | Wire secrets from Pulumi ESC into an app |
+
 ## Adding a new app
 
+Load the `deploy-homelab-app` skill in your AI agent and say *"add a new app to homelab-apps"*.
+
+Or manually:
 1. Create `apps/<name>/` following the structure of `apps/lobehub/`
 2. Add a deploy workflow `.github/workflows/deploy-<name>.yml`
 3. Run `pulumi up` locally once to create the Kubernetes namespace
