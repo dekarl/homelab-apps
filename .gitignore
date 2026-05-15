@@ -18,3 +18,9 @@ dist/
 # Secrets — never commit these
 *.kubeconfig
 *.env
+
+# Workflow tooling state (opencode, beads)
+.opencode/
+.beads/
+.vibe/beads-state-*.json
+.vibe/conversations/
