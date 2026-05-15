@@ -42,7 +42,11 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # Use GHCR_TOKEN (PAT with write:packages) if set, else fall back to
+          # GITHUB_TOKEN. GHCR_TOKEN is required if the package was first
+          # created outside of Actions and is not yet linked to this repo.
+          # Once the package is public or linked, GITHUB_TOKEN is sufficient.
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
