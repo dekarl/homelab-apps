@@ -356,6 +356,48 @@ def _debug_spawn_sync() -> dict:
         os.waitpid(pid, 0)
         info["fork"] = "ok"
 
+        # Test 4: epoll_create1 (used by Tokio runtime)
+        import ctypes.util as _cu
+        _libc = ctypes.CDLL(_cu.find_library("c"), use_errno=True)
+        efd = _libc.epoll_create1(0)
+        errno_ = ctypes.get_errno()
+        info["epoll_create1"] = f"fd={efd} errno={errno_}"
+        if efd >= 0:
+            _libc.close(efd)
+
+        # Test 5: clone with CLONE_THREAD (what Tokio uses for worker threads)
+        CLONE_THREAD = 0x00010000
+        CLONE_VM     = 0x00000100
+        CLONE_SIGHAND= 0x00000800
+        CLONE_FS     = 0x00000200
+        CLONE_FILES  = 0x00000400
+        CLONE_SYSVSEM= 0x00040000
+        CLONE_SETTLS = 0x00080000
+        CLONE_PARENT_SETTID = 0x00100000
+        CLONE_CHILD_CLEARTID = 0x00200000
+        # Don't actually try clone(CLONE_THREAD) - it's too complex without proper TLS setup
+        # Instead check if CLONE_NEWUSER is available (sandlock may try this)
+        CLONE_NEWUSER = 0x10000000
+        ret = _libc.unshare(CLONE_NEWUSER)
+        errno_ = ctypes.get_errno()
+        info["unshare_newuser"] = f"ret={ret} errno={errno_}"
+
+        # Test 6: check /proc/sys/user/max_user_namespaces
+        try:
+            max_ns = pathlib.Path("/proc/sys/user/max_user_namespaces").read_text().strip()
+            info["max_user_namespaces"] = max_ns
+        except Exception as e:
+            info["max_user_namespaces"] = f"error: {e}"
+
+        # Test 7: check if prctl(PR_SET_SECCOMP) is blocked
+        PR_SET_SECCOMP = 22
+        SECCOMP_MODE_STRICT = 1
+        # Don't actually set strict mode, just test another prctl
+        PR_GET_SECCOMP = 21
+        ret = _libc.prctl(PR_GET_SECCOMP, 0, 0, 0, 0)
+        errno_ = ctypes.get_errno()
+        info["prctl_get_seccomp"] = f"ret={ret} errno={errno_}"
+
     except Exception as exc:
         info["exception"] = str(exc)
     finally:
