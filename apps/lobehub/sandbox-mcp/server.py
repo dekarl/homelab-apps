@@ -102,9 +102,15 @@ def _run_sandboxed_sync(cmd: list[str], ws: pathlib.Path, timeout: int = 30) -> 
     Sandlock's fork()-based supervisor fails when called from within a running
     asyncio event loop (sandlock_spawn returns null).
     """
+    import ctypes as _ct
+    import threading as _th
     try:
         policy = _make_policy(ws)
-        log.info("spawn: cmd=%s ws=%s", cmd, ws)
+        log.info(
+            "spawn: cmd=%s ws=%s tid=%s pid=%s threads=%s",
+            cmd, ws, _th.get_ident(), __import__('os').getpid(),
+            _th.active_count(),
+        )
         result = Sandbox(policy).run(cmd, timeout=float(timeout))
         log.info("done: success=%s exit=%s error=%s", result.success, result.exit_code, getattr(result, "error", None))
         output = result.stdout.decode(errors="replace")
@@ -300,22 +306,70 @@ class _LogBodyMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-async def _debug_spawn(request: StarletteRequest):
-    """Trigger a sandlock spawn from within the server process for diagnosis."""
-    import asyncio as _asyncio
+def _debug_spawn_sync() -> dict:
+    """Run sandlock spawn synchronously — call from run_in_executor."""
+    import os, ctypes, ctypes.util, threading
+    from sandlock import Sandbox, Policy
+    from sandlock._sdk import _lib, _NativePolicy, _make_argv
+
+    info = {
+        "pid": os.getpid(),
+        "tid": threading.get_ident(),
+        "active_threads": threading.active_count(),
+    }
+
+    # Read seccomp filter count for this thread
+    try:
+        with open(f"/proc/self/status") as f:
+            for line in f:
+                if "Seccomp" in line:
+                    info["seccomp"] = line.strip()
+    except Exception as e:
+        info["seccomp_err"] = str(e)
+
     ws = _session_workspace("__debug__")
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=ws, delete=False, prefix="_dbg_") as f:
         f.write("print('debug spawn ok')\n")
         sp = f.name
+
     try:
-        result = await _asyncio.get_event_loop().run_in_executor(
-            None, _run_sandboxed_sync, ["python3", sp], ws, 10
+        # Test 1: minimal policy (no net restriction)
+        p_min = Policy(
+            fs_readable=["/usr", "/lib", "/etc"],
+            fs_writable=[str(ws)],
+            clean_env=True,
+            env={"HOME": str(ws), "TMPDIR": str(ws), "PATH": "/usr/local/bin:/usr/bin:/bin"},
         )
-        return JSONResponse({"result": result, "ok": True})
+        r_min = Sandbox(p_min).run(["python3", sp], timeout=5.0)
+        info["minimal_policy"] = {"ok": r_min.success, "error": getattr(r_min, "error", None)}
+
+        # Test 2: full policy as used by tools
+        p_full = _make_policy(ws)
+        r_full = Sandbox(p_full).run(["python3", sp], timeout=5.0)
+        info["full_policy"] = {"ok": r_full.success, "error": getattr(r_full, "error", None)}
+
+        # Test 3: raw fork()
+        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+        pid = os.fork()
+        if pid == 0:
+            os._exit(0)
+        os.waitpid(pid, 0)
+        info["fork"] = "ok"
+
     except Exception as exc:
-        return JSONResponse({"error": str(exc), "ok": False})
+        info["exception"] = str(exc)
     finally:
         pathlib.Path(sp).unlink(missing_ok=True)
+
+    return info
+
+
+async def _debug_spawn(request: StarletteRequest):
+    """Trigger sandlock spawn tests from within the server process."""
+    loop = asyncio.get_event_loop()
+    info = await loop.run_in_executor(None, _debug_spawn_sync)
+    log.info("debug_spawn result: %s", info)
+    return JSONResponse(info)
 
 
 # ---------------------------------------------------------------------------
