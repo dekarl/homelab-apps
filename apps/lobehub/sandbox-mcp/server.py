@@ -15,7 +15,7 @@ import logging
 import pathlib
 import tempfile
 from mcp.server.fastmcp import FastMCP
-from sandlock import Sandbox, Policy, landlock_abi_version, LandlockUnavailableError
+from sandlock import Sandbox, landlock_abi_version, LandlockUnavailableError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("sandbox_mcp")
@@ -65,14 +65,14 @@ def _resolve_safe(ws: pathlib.Path, path: str) -> pathlib.Path | None:
         return None
 
 
-def _make_policy(ws: pathlib.Path) -> Policy:
+def _make_sandbox(ws: pathlib.Path) -> Sandbox:
     """
-    Build a deny-by-default sandlock Policy for one execution.
+    Build a deny-by-default Sandbox for one execution.
 
-    Sandbox rules:
+    Rules:
     - Read-only: /usr, /lib, /lib64, /etc (runtime libs + Python stdlib)
     - Read-write: session workspace only
-    - No outbound network (net_allow_hosts=[])
+    - No outbound network (net_allow=[])
     - Memory limit: 256 MiB
     - Process limit: 20
     """
@@ -81,10 +81,10 @@ def _make_policy(ws: pathlib.Path) -> Policy:
     if lib64.exists() and not lib64.is_symlink():
         readable.append("/lib64")
 
-    return Policy(
+    return Sandbox(
         fs_readable=readable,
         fs_writable=[str(ws)],
-        net_allow_hosts=[],       # deny all outbound network
+        net_allow=[],             # deny all outbound network
         max_memory="256M",
         max_processes=20,
         clean_env=True,
@@ -94,10 +94,10 @@ def _make_policy(ws: pathlib.Path) -> Policy:
 
 def _run_sandboxed_sync(cmd: list[str], ws: pathlib.Path, timeout: int = 30) -> str:
     """Execute cmd inside a sandlock sandbox and return combined output."""
-    policy = _make_policy(ws)
+    sandbox = _make_sandbox(ws)
     log.info("spawn: cmd=%s ws=%s", cmd, ws)
     try:
-        result = Sandbox(policy).run(cmd, timeout=float(timeout))
+        result = sandbox.run(cmd, timeout=float(timeout))
         stdout = result.stdout.decode(errors="replace")
         stderr = result.stderr.decode(errors="replace")
         output = stdout
