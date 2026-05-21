@@ -1,6 +1,6 @@
 config:
   # Image reference — pinned to a specific version from GHCR.
-  aftertouch:image: ghcr.io/gesellix/bose-soundtouch:0.76
+  aftertouch:image: ghcr.io/gesellix/bose-soundtouch:0.86
   # Management credentials (set as secrets via: pulumi config set aftertouch:mgmtUsername <val> --secret)
   aftertouch:mgmtUsername:
     secure: AAABAKWV2MssF0th7F5LPAgpHMa4lrzP2rgTxLSv59lIiARSXzFQt7+z
