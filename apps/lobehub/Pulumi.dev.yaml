@@ -30,3 +30,6 @@ config:
   lobehub:openrouterApiKey:
     secure: AAABAB9CDL6Sy4aH3OsdSGxWI21c572zVh15I63JIUyhGPx7k3Lsz+XkMCfML/jgoa6oni+4uIhMr198gPxH9xWiPAM0Yf2mYowPSBsn2yBFRarCWJt2FUZCN5GMKCSkaWqqH7ymAukv
   lobehub:enableMemory: "true"
+  lobehub:enableSearch: "true"
+  lobehub:braveApiKey:
+    secure: AAABAAu+XOuTZR9PZwFgA22b0iFXXTdywWCceMR1BXJ2A2h4u4SiHWSM2CVpNfYaVE8TGk4V3PfB8SH3AfuY
