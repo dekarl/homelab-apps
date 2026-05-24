@@ -215,13 +215,20 @@ ${appserviceConfigSection}
         {
           name: 'create-media-dir',
           image: 'busybox:1.36',
-          command: ['sh', '-c', 'mkdir -p /var/lib/conduit/db/media && chown 1000:1000 /var/lib/conduit/db/media'],
+          // Run as the same user as the main container (1000:1000) so that
+          // mkdir creates the directory with the correct ownership without
+          // needing root. This satisfies the namespace's `restricted`
+          // PodSecurity policy (no root, no privilege escalation).
+          command: ['sh', '-c', 'mkdir -p /var/lib/conduit/db/media'],
           volumeMounts: [
             { name: 'conduit-data', mountPath: '/var/lib/conduit/db' },
           ],
           securityContext: {
-            runAsUser: 0,
-            runAsGroup: 0,
+            runAsUser: 1000,
+            runAsGroup: 1000,
+            allowPrivilegeEscalation: false,
+            capabilities: { drop: ['ALL'] },
+            seccompProfile: { type: 'RuntimeDefault' },
           },
         },
       ],
