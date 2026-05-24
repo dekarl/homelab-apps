@@ -2,7 +2,7 @@
 voice-transcription-bot — Matrix bot that transcribes and summarizes voice messages.
 
 Lifecycle:
-  1. Join as a regular Matrix user (registered once via Conduit admin room).
+  1. Join as a regular Matrix user (registered once via Conduit admin room or via explicit invite).
   2. Listen for m.room.message events with msgtype = m.audio.
   3. Download the audio file from the homeserver (local — stays on-cluster).
   4. POST to whisper.cpp (flinker:8081) → get transcript text.
