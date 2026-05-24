@@ -1,0 +1,27 @@
+config:
+  matrix:homelabStack: mrsimpson/homelab/dev
+  # Container images — pin to specific tags in production; latest is acceptable for dev
+  matrix:conduitImage: matrixconduit/matrix-conduit:8def22bfb8b9b23bbd47e17772f2bd80500eacf6
+  matrix:botImage: ghcr.io/mrsimpson/voice-transcription-bot:latest
+  # LLM config for local summarization (llama.cpp on flinker:8080)
+  matrix:llmUrl: http://flinker:8080/v1
+  matrix:llmModel: qwen3.6-35b-a3b # change to match the model loaded in llama.cpp
+  matrix:conduitAdminToken:
+    secure: AAABAI7FK+2grhoLownXAT+TErS7jymwNz/tW732LnylmlG1rHpVtNfE54QdM8QkYEg9RQ==
+  matrix:whatsappAsToken:
+    secure: AAABABw33YTfsiRZIZ7xh6lM/IcYpkexMWyagsEkh+n4V3pdgTOYkhTXeGRtFjingYiPc4+zwnIhVc2tHEPUdQbl50uxaabuaZj0a8rbCFF2mGZb8r0YLtkpmZY/dJxp
+  matrix:whatsappHsToken:
+    secure: AAABABQYdNiXVYwutBDYtQ/EMf4r9Mn4iUJzg2MzPDt8Cs0hS7I/zt4GYnDQiZq21bmdVdpbDp8E4++9KN3ijmsrEmcSG6532g5oA4X5qgE1leFGDftEQIwLW9GnZdjq
+  matrix:signalAsToken:
+    secure: AAABANUsbYgQXRoDWnvZTU1Muoe4VqWPlJa3BonLc9CNbW7rSPO/osL9dWFxt1g3/Elw104sbCVu27qj5uocPPvUtpptBJSlTQANwiotjM1tTlyTgqTc9BJw3xEzk+qT
+  matrix:signalHsToken:
+    secure: AAABACKeTrwaeTaXcyjinRBkjQxZZ6pSecbMCHg2tO8JlZDKonGm+ZETq3ijTOLkUfL3jHCaj4kYgWkFLGaTWQExZnXQu+Wy44cbim8GWvArNfXX8mh++ScNvdfjHMLX
+
+# Required secrets — set via:
+#   pulumi config set matrix:<key> <value> --secret --cwd apps/matrix
+#
+# matrix:whatsappAsToken:   <appservice token from registration.yaml>
+# matrix:whatsappHsToken:   <homeserver token from registration.yaml>
+# matrix:signalAsToken:     <appservice token from registration.yaml>
+# matrix:signalHsToken:     <homeserver token from registration.yaml>
+# matrix:conduitAdminToken: <Conduit admin token (for registration API)>

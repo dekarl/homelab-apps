@@ -1,0 +1,15 @@
+{
+  "conversationId": "lobehub-default-rm5dan",
+  "projectPath": "/Users/oliverjaegle/projects/privat/homelab-apps/apps/lobehub",
+  "gitBranch": "default",
+  "currentPhase": "code",
+  "planFilePath": "/Users/oliverjaegle/projects/privat/homelab-apps/apps/lobehub/.vibe/development-plan-default.md",
+  "workflowName": "greenfield",
+  "requireReviewsBeforePhaseTransition": false,
+  "createdAt": "2026-05-21T14:01:55.871Z",
+  "updatedAt": "2026-05-21T14:45:56.748Z",
+  "sessionMetadata": {
+    "referenceId": "ses_1b528e27affeoiHUO7RPWBFqHO",
+    "createdAt": "2026-05-21T14:01:12.341Z"
+  }
+}

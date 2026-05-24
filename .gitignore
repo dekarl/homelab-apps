@@ -19,6 +19,11 @@ dist/
 *.kubeconfig
 *.env
 
+# Python
+__pycache__/
+*.pyc
+.venv/
+
 # Workflow tooling state (opencode, beads)
 .opencode/
 .beads/

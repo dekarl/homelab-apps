@@ -1,0 +1,57 @@
+name: Deploy matrix
+
+# Deploys the matrix Pulumi stack to the homelab k3s cluster.
+#
+# Uses the reusable workflow from mrsimpson/homelab which handles:
+#   - Tailscale VPN join (to reach the local cluster API)
+#   - kubeconfig setup
+#   - pulumi up / preview
+#
+# Pulumi project: "matrix" (Pulumi.yaml name: matrix)
+# Stack: mrsimpson/matrix/dev
+# Base infra read via: StackReference("mrsimpson/homelab/dev")
+#
+# Required repository secrets:
+#   TS_OAUTH_CLIENT_ID, TS_OAUTH_CLIENT_SECRET  — Tailscale OAuth client (tag:ci)
+#   KUBECONFIG                                   — base64-encoded namespace-scoped kubeconfig
+#   PULUMI_ACCESS_TOKEN                          — Pulumi Cloud access token
+#
+# Bootstrap secrets with: ./scripts/setup-homelab-apps.sh
+# (from the mrsimpson/homelab repository)
+
+on:
+  # Deploy on any commit that touches the matrix stack config or code.
+  push:
+    branches:
+      - main
+    paths:
+      - apps/matrix/**
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # Main deploy job — calls the reusable workflow from the homelab repo.
+  # Pinned to a specific commit SHA (not @main) to prevent unexpected changes
+  # from running with this repo's secrets.
+  deploy:
+    name: Deploy
+    uses: mrsimpson/homelab/.github/workflows/deploy-to-cluster.yml@c7dd6ee8bbd17688021671d052ea933cd9a10af2
+    with:
+      # Pulumi project "matrix" (from apps/matrix/Pulumi.yaml "name: matrix").
+      # NOT mrsimpson/homelab/dev — that is the base infra stack read via StackReference.
+      pulumi-stack: mrsimpson/matrix/dev
+      working-directory: apps/matrix
+      pulumi-command: up
+      # package-lock.json is at the repo root (npm workspaces monorepo, not in apps/matrix/)
+      npm-lock-file-path: package-lock.json
+    secrets:
+      # Explicit secrets map — do NOT use "secrets: inherit" (would pass all secrets
+      # to the reusable workflow, including any future secrets added to this repo).
+      TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+      TS_OAUTH_CLIENT_SECRET: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+      KUBECONFIG: ${{ secrets.KUBECONFIG }}
+      PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}

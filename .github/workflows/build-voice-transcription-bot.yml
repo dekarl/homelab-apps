@@ -1,0 +1,65 @@
+name: Build voice-transcription-bot image
+
+# Builds and pushes the voice-transcription-bot image to ghcr.io.
+#
+# The image provides the Matrix bot that listens for voice messages,
+# transcribes them via whisper.cpp (flinker:8081), and posts transcripts
+# back as threaded replies.
+#
+# Image: ghcr.io/<owner>/voice-transcription-bot:<sha> and :latest
+#
+# After a successful build, update the image tag in the matrix Pulumi config:
+#   pulumi config set matrix:botImage \
+#     ghcr.io/<owner>/voice-transcription-bot:<sha> --cwd apps/matrix
+# then commit Pulumi.dev.yaml and let the deploy-matrix workflow pick it up.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - apps/matrix/voice-transcription-bot/**
+  pull_request:
+    branches:
+      - main
+    paths:
+      - apps/matrix/voice-transcription-bot/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write   # required to push to ghcr.io
+  id-token: write   # required for provenance attestation (docker/build-push-action@v6)
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/matrix/voice-transcription-bot
+          platforms: linux/amd64
+          # Only push to GHCR on push to main or manual trigger.
+          # PRs build the image but do not push (forks lack package write access).
+          push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/voice-transcription-bot:latest
+            ghcr.io/${{ github.repository_owner }}/voice-transcription-bot:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

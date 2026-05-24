@@ -1,0 +1,53 @@
+name: matrix
+description: Matrix voice-transcription pipeline — Conduit homeserver, mautrix bridges, Whisper ASR, transcription bot
+runtime:
+  name: nodejs
+  options:
+    typescript: true
+main: src/
+
+config:
+  # All values use the "matrix:" namespace prefix (matching pulumi.Config("matrix") in src/index.ts).
+  # Set with: pulumi config set matrix:<key> <value>
+
+  # Stack reference to homelab base stack (provides tunnelCname, cloudflareZoneId, domain)
+  matrix:homelabStack:
+    value: mrsimpson/homelab/dev
+
+  # Conduit Matrix homeserver image
+  # Available tags: https://hub.docker.com/r/matrixconduit/matrix-conduit/tags
+  # matrix:conduitImage:
+  #   value: matrixconduit/matrix-conduit:v0.9.0
+
+  # mautrix bridge images (latest is appropriate — bridges auto-update their DB schema)
+  # matrix:whatsappImage:
+  #   value: dock.mau.dev/mautrix/whatsapp:latest
+  # matrix:signalImage:
+  #   value: dock.mau.dev/mautrix/signal:latest
+
+  # Voice transcription bot image (built by CI from apps/matrix/voice-transcription-bot/)
+  # matrix:botImage:
+  #   value: ghcr.io/<owner>/voice-transcription-bot:latest
+
+  # LLM config for summarization (llama.cpp on flinker:8080)
+  # matrix:llmUrl:
+  #   value: http://flinker:8080/v1
+  # matrix:llmModel:
+  #   value: default  # must match the model loaded in llama.cpp
+
+  # Required secrets (set with --secret flag):
+  # pulumi config set matrix:whatsappAsToken  <token>  --secret
+  # pulumi config set matrix:whatsappHsToken  <token>  --secret
+  # pulumi config set matrix:signalAsToken    <token>  --secret
+  # pulumi config set matrix:signalHsToken    <token>  --secret
+  # pulumi config set matrix:conduitAdminToken <token> --secret
+  #
+  # Bootstrap order:
+  #   1. Generate bridge registration YAMLs (bridge --generate-registration)
+  #   2. kubectl create secret -n matrix conduit-appservice-whatsapp --from-file=registration.yaml
+  #   3. kubectl create secret -n matrix conduit-appservice-signal   --from-file=registration.yaml
+  #   4. pulumi up  (deploys all components)
+  #   5. Register bot user via Conduit admin room; save token to k8s Secret
+  #      kubectl create secret -n matrix transcription-bot-credentials \
+  #        --from-literal=BOT_ACCESS_TOKEN=<token>
+  #   6. kubectl rollout restart deployment/transcription-bot -n matrix
