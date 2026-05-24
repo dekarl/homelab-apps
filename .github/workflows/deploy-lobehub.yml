@@ -19,7 +19,8 @@ name: Deploy lobehub
 #
 # Required repository secrets:
 #   TS_OAUTH_CLIENT_ID, TS_OAUTH_CLIENT_SECRET  — Tailscale OAuth client (tag:ci)
-#   KUBECONFIG                                   — base64-encoded namespace-scoped kubeconfig
+#   KUBECONFIG                                   — base64-encoded kubeconfig for the shared
+#                                                  homelab-apps CI ServiceAccount (ci/homelab-apps)
 #   PULUMI_ACCESS_TOKEN                          — Pulumi Cloud access token
 #
 # Bootstrap secrets with: ./scripts/setup-homelab-apps.sh
