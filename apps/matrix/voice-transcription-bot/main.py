@@ -32,7 +32,7 @@ import aiohttp
 from nio import AsyncClient, InviteEvent, MatrixRoom, RoomMessageAudio, RoomSpaceChildEvent, SyncResponse
 
 # ---------------------------------------------------------------------------
-# Structured JSON logging
+# Structured JSON logging (bumped for CI test)
 # ---------------------------------------------------------------------------
 
 class JsonFormatter(logging.Formatter):

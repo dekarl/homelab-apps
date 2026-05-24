@@ -75,7 +75,8 @@ jobs:
 
       - name: Update bot image tag in Pulumi config
         run: |
-          pulumi config set matrix:botImage "${{ inputs.botImage }}" --cwd apps/matrix
+          pulumi config set matrix:botImage "${{ inputs.botImage }}" \
+            --cwd apps/matrix --stack mrsimpson/matrix/dev
         env:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
 
