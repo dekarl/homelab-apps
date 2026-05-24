@@ -26,6 +26,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# CI trigger: bump to test auto-deploy pipeline
+
 import aiohttp
 from nio import AsyncClient, InviteEvent, MatrixRoom, RoomMessageAudio, RoomSpaceChildEvent, SyncResponse
 
