@@ -241,16 +241,19 @@ ${appserviceConfigSection}
       probes: {
         readinessProbe: {
           httpGet: { path: '/_matrix/client/versions', port: CONDUIT_PORT },
+          // RocksDB WAL replay can take several minutes on restart after
+          // compaction lag. Give conduit up to 10 min before failing readiness.
           initialDelaySeconds: 30,
-          periodSeconds: 15,
-          failureThreshold: 6,
+          periodSeconds: 30,
+          failureThreshold: 20,  // 30 + 20×30 = 630 s ≈ 10 min
         },
         livenessProbe: {
-          // First boot initialises RocksDB + admin room — allow 2 min before killing.
           httpGet: { path: '/_matrix/client/versions', port: CONDUIT_PORT },
-          initialDelaySeconds: 120,
+          // Don't kill the pod during WAL replay — only kill if it stops
+          // responding after it was once healthy.
+          initialDelaySeconds: 300,
           periodSeconds: 30,
-          failureThreshold: 5,
+          failureThreshold: 5,   // 300 + 5×30 = 450 s after initial delay
         },
       },
     } satisfies Omit<ExposedWebAppArgs, 'tls' | 'gatewayApi' | 'externalSecrets'>,
