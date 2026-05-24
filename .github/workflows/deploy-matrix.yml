@@ -34,15 +34,9 @@ on:
       - "!**/*.md"
       - "!apps/matrix/voice-transcription-bot/**"
 
-  # Manual deploy with optional bot image override.
-  # Also triggered automatically by build-voice-transcription-bot after a
-  # successful image push on main, so the new bot image rolls out immediately.
+  # Manual trigger for ad-hoc deploys (e.g. after config changes, rollbacks).
+  # Bot image updates are driven by the build workflow committing to Pulumi.dev.yaml.
   workflow_dispatch:
-    inputs:
-      botImage:
-        description: "Bot image tag (leave blank to keep current stack config)"
-        type: string
-        required: false
 
 permissions:
   contents: read
@@ -51,50 +45,11 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # Optional pre-step: update bot image tag in Pulumi stack config before deploying.
-  # Runs automatically when build-voice-transcription-bot triggers this workflow,
-  # or when an image override is provided via workflow_dispatch.
-  update-image-config:
-    name: Update bot image config
-    runs-on: ubuntu-latest
-    if: >
-      github.event_name == 'workflow_dispatch' && inputs.botImage != ''
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-        working-directory: apps/matrix
-
-      - name: Update bot image tag in Pulumi config
-        run: |
-          pulumi config set matrix:botImage "${{ inputs.botImage }}" \
-            --cwd apps/matrix --stack mrsimpson/matrix/dev
-        env:
-          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
-
-  # Main deploy job — calls the reusable workflow from the homelab repo.
+  # Calls the reusable workflow from the homelab repo.
   # Pinned to a specific commit SHA (not @main) to prevent unexpected changes
   # from running with this repo's secrets.
   deploy:
     name: Deploy
-    needs: [update-image-config]
-    if: >
-      always() && (
-        github.event_name == 'push' ||
-        github.event_name == 'workflow_dispatch' && (
-          needs.update-image-config.result == 'success' ||
-          needs.update-image-config.result == 'skipped'
-        )
-      )
     uses: mrsimpson/homelab/.github/workflows/deploy-to-cluster.yml@c7dd6ee8bbd17688021671d052ea933cd9a10af2
     with:
       # Pulumi project "matrix" (from apps/matrix/Pulumi.yaml "name: matrix").
