@@ -18,8 +18,6 @@ export interface BotArgs {
   whisperUrl?: string;
   /** llama.cpp URL — defaults to http://flinker:8080/v1 */
   llmUrl?: string;
-  /** LLM model name — defaults to "default" */
-  llmModel?: string;
   /**
    * ESC key for the bot's Matrix access token.
    * Stored in Pulumi ESC (mrsimpson/homelab/dev) and synced via ExternalSecret.
@@ -74,7 +72,6 @@ export function deployBot(args: BotArgs): BotOutputs {
   const nsName = ns.metadata.name;
   const whisperUrl = args.whisperUrl ?? 'http://flinker:8081';
   const llmUrl = args.llmUrl ?? 'http://flinker:8080/v1';
-  const llmModel = args.llmModel ?? 'default';
   const escBotTokenKey = args.escBotTokenKey ?? 'matrix-bot-access-token';
   const credentialsSecretName = 'transcription-bot-credentials';
 
@@ -124,7 +121,6 @@ export function deployBot(args: BotArgs): BotOutputs {
         MATRIX_BOT_USER_ID: args.botUserId,
         WHISPER_URL: whisperUrl,
         LLM_URL: llmUrl,
-        LLM_MODEL: llmModel,
         STORE_PATH: '/data/nio-store',
       },
     },

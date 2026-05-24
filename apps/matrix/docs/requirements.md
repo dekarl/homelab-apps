@@ -24,7 +24,7 @@ In a future phase, transcripts should be forwardable to a LobeHub AI agent.
 
 ### FR-3: Summarization
 - **FR-3.1** The system MUST generate a concise summary of each transcribed voice message.
-- **FR-3.2** Summarization MUST use the existing OpenRouter API (already configured in the homelab stack) — no new provider needed.
+- **FR-3.2** Summarization MUST use the local llama.cpp inference server on flinker — no external cloud API. The loaded chat model is discovered dynamically at startup.
 
 ### FR-4: Result Delivery
 - **FR-4.1** Transcription + summary MUST be posted back as a reply in the same Matrix room/conversation where the voice message arrived — so context is preserved.
@@ -82,7 +82,7 @@ This is a **private single-user homeserver** — not a public Matrix service. Th
 - **WhatsApp ToS**: mautrix-whatsapp uses the WhatsApp Web multi-device protocol — Meta has been known to occasionally ban accounts using unofficial clients. Risk is low with a physical phone as the primary device.
 - **Conduit beta status**: Conduit is labelled beta software. For a private single-user inbox this is acceptable; for a production service it would not be.
 - **iMessage**: Out of scope for v1 — mautrix-imessage requires a dedicated Mac app.
-- **OpenRouter for summarization**: Transcripts (text only, not audio) are sent to OpenRouter for summarization. Voice message content will leave the homelab as text. This is a deliberate trade-off — if unacceptable, summarization can be switched to the local flinker inference endpoint.
+- **Local LLM for summarization**: Summarization uses the local llama.cpp server on flinker — transcripts do not leave the homelab. The loaded chat model is discovered dynamically at startup via `/v1/models`.
 
 ### Usability
 - **NFR-U1** The unified inbox MUST be accessible from iPhone (a Matrix client app).

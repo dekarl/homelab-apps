@@ -36,7 +36,31 @@ except ImportError:
 
 WHISPER_URL = os.environ.get("WHISPER_URL", "http://flinker:8081")
 LLM_URL = os.environ.get("LLM_URL", "http://flinker:8080/v1")
-LLM_MODEL = os.environ.get("LLM_MODEL", "default")
+
+
+def discover_llm_model() -> str | None:
+    """
+    Query GET /v1/models and return the first loaded non-embeddings model id,
+    or None if none available. Mirrors the logic in main.py _discover_llm_model().
+    """
+    try:
+        resp = requests.get(f"{LLM_URL}/models", timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"  ⚠️  Could not reach {LLM_URL}/models: {e}")
+        return None
+
+    for model in data.get("data", []):
+        model_id = model.get("id", "")
+        status_value = (model.get("status") or {}).get("value", "")
+        if status_value != "loaded":
+            continue
+        args = (model.get("status") or {}).get("args", [])
+        if "--embeddings" in args:
+            continue
+        return model_id
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +143,12 @@ def test_llm(transcript: str) -> str | None:
     print(f"\n{'='*60}")
     print("STEP 2: llama.cpp summarization")
     print(f"  URL:    {LLM_URL}/chat/completions")
-    print(f"  Model:  {LLM_MODEL}")
+    print(f"  Discovering model from {LLM_URL}/models ...")
+    llm_model = discover_llm_model()
+    if llm_model is None:
+        print(f"  ❌ No loaded chat model found at {LLM_URL}/models — skipping LLM test")
+        return None
+    print(f"  Model:  {llm_model} (auto-discovered)")
     print(f"  Input:  {transcript!r}")
     print(f"{'='*60}")
 
@@ -127,7 +156,7 @@ def test_llm(transcript: str) -> str | None:
         resp = requests.post(
             f"{LLM_URL}/chat/completions",
             json={
-                "model": LLM_MODEL,
+                "model": llm_model,
                 "messages": [
                     {
                         "role": "system",
@@ -142,7 +171,7 @@ def test_llm(transcript: str) -> str | None:
                 "temperature": 0.3,
             },
             headers={"Authorization": "Bearer not-needed", "Content-Type": "application/json"},
-            timeout=30,
+            timeout=120,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -174,7 +203,7 @@ def test_llm(transcript: str) -> str | None:
 def main() -> None:
     print("voice-transcription-bot smoke test")
     print(f"whisper.cpp: {WHISPER_URL}")
-    print(f"llama.cpp:   {LLM_URL}  model={LLM_MODEL}")
+    print(f"llama.cpp:   {LLM_URL}  (model auto-discovered from /v1/models)")
 
     # Determine audio file
     if len(sys.argv) > 1:

@@ -32,8 +32,8 @@ config:
   # LLM config for summarization (llama.cpp on flinker:8080)
   # matrix:llmUrl:
   #   value: http://flinker:8080/v1
-  # matrix:llmModel:
-  #   value: default  # must match the model loaded in llama.cpp
+  # Note: llmModel is no longer configurable — the bot auto-discovers the loaded
+  # chat model from GET /v1/models at startup.
 
   # Required secrets (set with --secret flag):
   # pulumi config set matrix:whatsappAsToken  <token>  --secret

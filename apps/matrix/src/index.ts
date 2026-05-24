@@ -33,7 +33,8 @@ const botImage = cfg.get('botImage') ?? 'ghcr.io/mrsimpson/voice-transcription-b
 
 // LLM config (llama.cpp on flinker:8080)
 const llmUrl = cfg.get('llmUrl') ?? 'http://flinker:8080/v1';
-const llmModel = cfg.get('llmModel') ?? 'default';
+// LLM_MODEL is no longer configured here — the bot discovers the loaded model
+// dynamically from GET /v1/models at startup (see main.py _discover_llm_model).
 
 // Appservice tokens — getSecret (not requireSecret) so Conduit deploys even when bridges
 // aren't configured yet. A bridge is only enabled when both its tokens are present.
@@ -111,7 +112,6 @@ const botOutputs = deployBot({
   homeserverUrl: conduitOutputs.inClusterUrl,
   botUserId,
   llmUrl,
-  llmModel,
 });
 
 // ---------------------------------------------------------------------------

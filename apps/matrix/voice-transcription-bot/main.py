@@ -74,9 +74,60 @@ BOT_USER_ID = require_env("MATRIX_BOT_USER_ID")
 WHISPER_URL = os.environ.get("WHISPER_URL", "http://flinker:8081")  # whisper.cpp ASR
 WHISPER_NO_SPEECH_THOLD = float(os.environ.get("WHISPER_NO_SPEECH_THOLD", "0.6"))
 LLM_URL = os.environ.get("LLM_URL", "http://flinker:8080/v1")  # llama.cpp OpenAI-compatible API
-LLM_MODEL = os.environ.get("LLM_MODEL", "default")  # model loaded in llama.cpp
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "not-needed")  # llama.cpp ignores this
 STORE_PATH = os.environ.get("STORE_PATH", "/data/nio-store")
+
+# ---------------------------------------------------------------------------
+# LLM model discovery — resolved at startup, not from env
+# ---------------------------------------------------------------------------
+
+# Populated by _discover_llm_model() at startup. Falls back to None (summarization
+# skipped gracefully) if no loaded non-embeddings model is found.
+_llm_model: str | None = None
+
+
+async def _discover_llm_model() -> str | None:
+    """
+    Call GET /v1/models on llama.cpp and return the id of the first loaded
+    chat (non-embeddings) model, or None if none is available.
+
+    A model is considered an embeddings model if '--embeddings' appears in
+    its server args — these cannot be used for chat/completions.
+    """
+    models_url = f"{LLM_URL}/models"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                models_url,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    logger.warning({
+                        "event": "llm_discovery_error",
+                        "status": resp.status,
+                        "body": body[:300],
+                    })
+                    return None
+                data = await resp.json()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning({"event": "llm_discovery_unavailable", "error": str(exc)})
+        return None
+
+    for model in data.get("data", []):
+        model_id = model.get("id", "")
+        status_value = (model.get("status") or {}).get("value", "")
+        if status_value != "loaded":
+            continue
+        # Skip embedding models — they have --embeddings in their server args
+        args = (model.get("status") or {}).get("args", [])
+        if "--embeddings" in args:
+            continue
+        logger.info({"event": "llm_model_discovered", "model_id": model_id})
+        return model_id
+
+    logger.warning({"event": "llm_no_loaded_chat_model", "models_url": models_url})
+    return None
 
 # ---------------------------------------------------------------------------
 # Dedup set — prevents double-processing on reconnect
@@ -139,11 +190,34 @@ async def transcribe(audio_bytes: bytes, filename: str = "audio.ogg") -> str | N
 # LLM summarization (llama.cpp on flinker:8080)
 # ---------------------------------------------------------------------------
 
-SUMMARIZE_SYSTEM_PROMPT = (
-    "You are a concise assistant. Summarize the following voice message transcript "
-    "in 1-3 sentences. Preserve proper nouns, dates, and key action items. "
-    "Reply only with the summary — no preamble."
-)
+SUMMARIZE_SYSTEM_PROMPT = """\
+You are a voice message assistant. Detect the language of the transcript and \
+respond entirely in that language — including all section headings.
+
+Your response must follow this exact structure (translate the headings):
+
+**TL;DR:** <one sentence summary>
+
+**<translated "Actions">:**
+- <action 1>
+- <action 2>
+
+**<translated "Key points">:**
+- <aspect 1>
+- <aspect 2>
+
+Rules:
+- Every word in the response — headings, content, punctuation style — must be \
+in the detected language.
+- The actions section must only be included if there are explicit \
+call-to-actions, requests, or tasks in the transcript. Omit it entirely if \
+there are none — do not write the heading with an empty list or "none".
+- The key points section lists one bullet per distinct topic or aspect covered \
+in the transcript.
+- Preserve proper nouns, dates, and numbers exactly as they appear.
+- Reply with only the structured response above — no preamble, no explanation, \
+no closing remarks.\
+"""
 
 
 async def summarize(transcript: str) -> str | None:
@@ -151,16 +225,20 @@ async def summarize(transcript: str) -> str | None:
     Send transcript to llama.cpp (OpenAI-compatible /v1/chat/completions)
     and return the summary, or None on failure.
     """
+    if _llm_model is None:
+        logger.warning({"event": "llm_skipped", "reason": "no loaded chat model discovered at startup"})
+        return None
+
     payload = {
-        "model": LLM_MODEL,
+        "model": _llm_model,
         "messages": [
             {"role": "system", "content": SUMMARIZE_SYSTEM_PROMPT},
             {"role": "user", "content": transcript},
         ],
         # Qwen3 is a reasoning/thinking model — it needs tokens to think before
-        # emitting content. 200 is too few. 1000 gives enough budget for thinking
-        # AND the actual summary sentence. Increase if responses are cut off.
-        "max_tokens": 1000,
+        # emitting content. 2000 gives budget for thinking AND the structured
+        # summary (TL;DR + optional Actions + Key points). Increase if cut off.
+        "max_tokens": 2000,
         "temperature": 0.3,
     }
     headers = {
@@ -173,12 +251,16 @@ async def summarize(transcript: str) -> str | None:
                 f"{LLM_URL}/chat/completions",
                 json=payload,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=30),
+                timeout=aiohttp.ClientTimeout(total=120),
             ) as resp:
                 if resp.status != 200:
-                    logger.warning(
-                        {"event": "llm_error", "status": resp.status, "body": await resp.text()}
-                    )
+                    body = await resp.text()
+                    logger.warning({
+                        "event": "llm_error",
+                        "status": resp.status,
+                        "model": _llm_model,
+                        "body": body[:500],
+                    })
                     return None
                 data = await resp.json()
                 msg = data["choices"][0]["message"]
@@ -191,8 +273,11 @@ async def summarize(transcript: str) -> str | None:
                     return None
                 logger.info({"event": "summarized", "chars": len(summary)})
                 return summary
+    except aiohttp.ClientResponseError as exc:  # noqa: BLE001
+        logger.warning({"event": "llm_unavailable", "http_status": exc.status, "message": exc.message})
+        return None
     except Exception as exc:  # noqa: BLE001
-        logger.warning({"event": "llm_unavailable", "error": str(exc)})
+        logger.warning({"event": "llm_unavailable", "error": type(exc).__name__, "detail": str(exc)})
         return None
 
 
@@ -200,17 +285,66 @@ async def summarize(transcript: str) -> str | None:
 # Reply formatting
 # ---------------------------------------------------------------------------
 
+def _markdown_to_html(text: str) -> str:
+    """
+    Minimal Markdown → HTML conversion for the subset the LLM produces:
+      **bold** → <strong>
+      - bullet  → <li> inside <ul>
+      blank line → paragraph break
+
+    Not a full parser — just enough for our structured prompt output.
+    """
+    import re
+    lines = text.splitlines()
+    html_lines: list[str] = []
+    in_ul = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        if stripped.startswith("- "):
+            if not in_ul:
+                html_lines.append("<ul>")
+                in_ul = True
+            content = stripped[2:]
+            # bold inside list items
+            content = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", content)
+            html_lines.append(f"<li>{content}</li>")
+        else:
+            if in_ul:
+                html_lines.append("</ul>")
+                in_ul = False
+            if not stripped:
+                html_lines.append("")
+            else:
+                # bold inline
+                converted = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", stripped)
+                html_lines.append(f"<p>{converted}</p>")
+
+    if in_ul:
+        html_lines.append("</ul>")
+
+    return "\n".join(html_lines)
+
+
 def build_reply_body(transcript: str, summary: str | None) -> tuple[str, str]:
-    """Return (plain_text_body, formatted_html_body) for the reply."""
+    """Return (plain_text_body, formatted_html_body) for the reply.
+
+    When a summary is available it is rendered first (structured markdown from
+    the LLM), followed by the full transcript under a separator.  The plain
+    text body uses the raw markdown so clients that don't render HTML still
+    read naturally.
+    """
+    transcript_label = "📄 Transcript"
     if summary:
-        plain = f"📝 **Summary:** {summary}\n\n📄 **Transcript:** {transcript}"
+        plain = f"{summary}\n\n---\n{transcript_label}:\n{transcript}"
         html = (
-            f"<p><strong>📝 Summary:</strong> {summary}</p>"
-            f"<p><strong>📄 Transcript:</strong> {transcript}</p>"
+            f"{_markdown_to_html(summary)}"
+            f"<hr/><p><strong>{transcript_label}:</strong><br/>{transcript}</p>"
         )
     else:
-        plain = f"📄 **Transcript:** {transcript}"
-        html = f"<p><strong>📄 Transcript:</strong> {transcript}</p>"
+        plain = f"{transcript_label}:\n{transcript}"
+        html = f"<p><strong>{transcript_label}:</strong><br/>{transcript}</p>"
     return plain, html
 
 
@@ -333,7 +467,7 @@ async def _send_reply(
 ) -> None:
     """Send a threaded reply to the original audio event."""
     content: dict[str, Any] = {
-        "msgtype": "m.text",
+        "msgtype": "m.notice",
         "body": plain,
         "format": "org.matrix.custom.html",
         "formatted_body": html,
@@ -381,6 +515,18 @@ async def _send_error_reply(
 
 async def run() -> None:
     """Main loop: login → sync → handle audio events."""
+    global _llm_model  # noqa: PLW0603
+
+    # Discover the loaded LLM model before anything else.
+    # This is best-effort: if llama.cpp is unreachable the bot still starts and
+    # falls back to transcript-only replies (graceful degradation, design.md §4).
+    _llm_model = await _discover_llm_model()
+    if _llm_model:
+        logger.info({"event": "llm_ready", "model": _llm_model, "url": LLM_URL})
+    else:
+        logger.warning({"event": "llm_unavailable_at_startup",
+                        "reason": "no loaded chat model found — summaries disabled until restart"})
+
     # Wait until BOT_ACCESS_TOKEN is available — the secret is provisioned after
     # Conduit is running. The pod keeps running and retries every 30 s so k8s
     # doesn't enter CrashLoopBackOff from a hard exit.

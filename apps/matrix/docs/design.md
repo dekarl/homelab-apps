@@ -79,11 +79,32 @@ Whisper instance. An in-memory set deduplicates event IDs across reconnects.
 
 Error handling tiers:
 - Whisper unavailable → post "transcription unavailable" reply; continue.
-- OpenRouter error → post transcript only (no summary); continue.
+- LLM error → post transcript only (no summary); continue.
 - Matrix send failure → log and continue; do not crash.
 - Invalid access token → crash immediately; let k8s restart.
 
 All log output is structured JSON for `kubectl logs | jq` compatibility.
+
+All bot replies use `msgtype: m.notice` so that mautrix bridges (Signal, WhatsApp) do not
+attempt to forward them upstream, preventing spurious "not bridged" bridge warnings.
+
+---
+
+## 5. LLM Integration
+
+Summarization uses the local llama.cpp inference server on flinker (not OpenRouter). The loaded
+chat model is discovered dynamically at startup via `GET /v1/models` — the bot picks the first
+model with `status.value = "loaded"` that is not an embeddings model (heuristic: no
+`--embeddings` flag in model args). No `LLM_MODEL` env var is needed or accepted.
+
+The summary prompt instructs the model to detect the transcript language and produce every
+word of the response — including section headings — in that language. The structured output
+format is: **TL;DR** (one sentence) + optional **Actions** section (only when explicit
+call-to-actions exist) + **Key points** bullets. `max_tokens` is set to 2000 to accommodate
+chain-of-thought reasoning models (e.g. Qwen3).
+
+LLM timeout is 120 s (matching the Whisper timeout) to allow for KV-cache loading on large
+models.
 
 ---
 
