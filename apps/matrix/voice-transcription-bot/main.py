@@ -3,11 +3,15 @@ voice-transcription-bot — Matrix bot that transcribes and summarizes voice mes
 
 Lifecycle:
   1. Join as a regular Matrix user (registered once via Conduit admin room or via explicit invite).
-  2. Listen for m.room.message events with msgtype = m.audio.
-  3. Download the audio file from the homeserver (local — stays on-cluster).
-  4. POST to whisper.cpp (flinker:8081) → get transcript text.
-  5. POST transcript to llama.cpp (flinker:8080) → get summary.
-  6. Send transcript + summary as a threaded reply in the originating room.
+  2. Listen for m.room.message events with msgtype = m.audio (direct audio events).
+  3. Listen for m.room.message events with msgtype = m.text that @-mention the bot
+     or arrive in DM rooms.
+  4. For audio events: download → transcribe via whisper.cpp → summarize via llama.cpp →
+     reply with transcript + summary as a threaded message.
+  5. For text-with-audio events: resolve the referenced audio, transcribe, summarize
+     using the text as a custom LLM instruction, reply with the result.
+  6. For text-without-audio events: reply with a short German notice that the bot
+     only processes voice messages.
 
 Design:
   - Events processed sequentially to avoid overloading whisper.cpp / llama.cpp.
@@ -27,7 +31,15 @@ from pathlib import Path
 from typing import Any
 
 import aiohttp
-from nio import AsyncClient, InviteEvent, MatrixRoom, RoomMessageAudio, RoomSpaceChildEvent, SyncResponse
+from nio import (
+    AsyncClient,
+    InviteEvent,
+    MatrixRoom,
+    RoomMessageAudio,
+    RoomMessageText,
+    RoomSpaceChildEvent,
+    SyncResponse,
+)
 
 # ---------------------------------------------------------------------------
 # Structured JSON logging
@@ -220,19 +232,31 @@ no closing remarks.\
 """
 
 
-async def summarize(transcript: str) -> str | None:
+async def summarize(transcript: str, custom_prompt: str | None = None) -> str | None:
     """
     Send transcript to llama.cpp (OpenAI-compatible /v1/chat/completions)
     and return the summary, or None on failure.
+
+    Parameters
+    ----------
+    transcript:
+        The transcribed text to summarise.
+    custom_prompt:
+        Optional custom system prompt.  When provided it replaces the
+        default ``SUMMARIZE_SYSTEM_PROMPT`` so the caller can steer the
+        LLM's behaviour (e.g. free-form instructions attached to an audio
+        message).
     """
     if _llm_model is None:
         logger.warning({"event": "llm_skipped", "reason": "no loaded chat model discovered at startup"})
         return None
 
+    system_content = custom_prompt if custom_prompt is not None else SUMMARIZE_SYSTEM_PROMPT
+
     payload = {
         "model": _llm_model,
         "messages": [
-            {"role": "system", "content": SUMMARIZE_SYSTEM_PROMPT},
+            {"role": "system", "content": system_content},
             {"role": "user", "content": transcript},
         ],
         # Disable Qwen3's internal chain-of-thought — we want a direct structured
@@ -415,30 +439,10 @@ async def handle_audio_event(
     if event.sender == BOT_USER_ID:
         return
 
-    # Step 1: Download audio — use /_matrix/client/v1/media/download (MSC3916 authenticated).
-    # Conduit v0.10+ rejects the old unauthenticated /_matrix/media/v3/download with 404.
+    # Step 1: Download audio — use shared helper (MSC3916 authenticated download).
     audio_bytes: bytes | None = None
-    try:
-        mxc_url = event.url  # e.g. mxc://matrix.no-panic.org/XXXX
-        if not mxc_url or not mxc_url.startswith("mxc://"):
-            raise ValueError(f"Invalid MXC URL: {mxc_url!r}")
-        mxc_path = mxc_url[len("mxc://"):]  # "matrix.no-panic.org/XXXX"
-        dl_url = f"{HOMESERVER_URL}/_matrix/client/v1/media/download/{mxc_path}"
-        access_token = client.access_token
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                dl_url,
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=aiohttp.ClientTimeout(total=60),
-            ) as resp:
-                if resp.status == 200:
-                    audio_bytes = await resp.read()
-                    logger.info({"event": "download_ok", "event_id": event_id, "bytes": len(audio_bytes)})
-                else:
-                    body = await resp.text()
-                    logger.warning({"event": "download_failed", "event_id": event_id, "status": resp.status, "body": body[:200]})
-    except Exception as exc:  # noqa: BLE001
-        logger.warning({"event": "download_exception", "event_id": event_id, "error": str(exc)})
+    mxc_url = event.url  # e.g. mxc://matrix.no-panic.org/XXXX
+    audio_bytes = await _download_audio_from_mxc(client, mxc_url, event_id)
 
     if not audio_bytes:
         await _send_error_reply(client, room, event, "⚠️ Could not download audio file.")
@@ -459,6 +463,120 @@ async def handle_audio_event(
     await _send_reply(client, room, event, plain, html)
 
 
+# ---------------------------------------------------------------------------
+# Text message handler — mentions, DMs, audio-with-text
+# ---------------------------------------------------------------------------
+
+async def handle_text_event(
+    room: MatrixRoom,
+    event: RoomMessageText,
+    client: AsyncClient,
+) -> None:
+    """Process a text message that @-mentions the bot or arrives in a DM room.
+
+    Flow
+    ----
+    1. Skip own messages and already-processed events.
+    2. Check for bot mention (``m.mentions``) or DM room type.
+    3. If neither → silently ignore.
+    4. If the text references an audio event via ``m.relates_to``, download and
+       transcribe it; the text body becomes the custom LLM instruction.
+    5. If no audio reference → reply with a static German notice.
+    """
+    event_id = event.event_id
+
+    # Dedup
+    if event_id in _processed_event_ids:
+        logger.info({"event": "skipped_duplicate", "event_id": event_id})
+        return
+    _processed_event_ids.add(event_id)
+
+    # Don't process our own messages
+    if event.sender == BOT_USER_ID:
+        return
+
+    # --- Check: is this message directed at us? ---
+    # 1) Mention check
+    mentions = event.content.get("m.mentions", {})
+    mention_user_ids: list[str] = mentions.get("user_ids", [])
+    is_mentioned = BOT_USER_ID in mention_user_ids
+
+    # 2) DM check
+    is_dm = False
+    if not is_mentioned:
+        try:
+            room_type = room.get_state_event("m.room.type")
+            is_dm = room_type == "dm"
+        except Exception:  # noqa: BLE001
+            pass  # state not available — will fall through to mention-only path
+
+    if not is_mentioned and not is_dm:
+        return  # not directed at us
+
+    logger.info({
+        "event": "text_received",
+        "room_id": room.room_id,
+        "event_id": event_id,
+        "sender": event.sender,
+        "is_dm": is_dm,
+        "is_mentioned": is_mentioned,
+    })
+
+    # --- Look for referenced audio event ---
+    relates_to = event.content.get("m.relates_to", {})
+    referenced_event_id: str | None = relates_to.get("event_id")
+
+    if referenced_event_id:
+        # Resolve the referenced event from the store
+        try:
+            referenced_event = client.store.get_event(room.room_id, referenced_event_id)
+        except Exception:  # noqa: BLE001
+            referenced_event = None
+
+        if referenced_event is None:
+            await _send_error_reply(client, room, event, "⚠️ Referenced audio event not found in store.")
+            return
+
+        # Extract MXC URL from the referenced audio event
+        mxc_url = getattr(referenced_event, "url", None)
+        if not mxc_url:
+            # Try content-based lookup (some bridges store it differently)
+            ref_content = getattr(referenced_event, "content", {})
+            mxc_url = ref_content.get("url")
+
+        if not mxc_url:
+            await _send_error_reply(client, room, event, "⚠️ Referenced audio event has no download URL.")
+            return
+
+        # Download audio
+        audio_bytes = await _download_audio_from_mxc(client, mxc_url, referenced_event_id)
+        if not audio_bytes:
+            await _send_error_reply(client, room, event, "⚠️ Could not download referenced audio file.")
+            return
+
+        # Transcribe
+        transcript = await transcribe(audio_bytes, filename="audio.ogg")
+        if not transcript:
+            await _send_error_reply(
+                client, room, event,
+                "⚠️ Transcription unavailable — Whisper service may be starting up.",
+            )
+            return
+
+        # Summarize with custom prompt (the text body becomes the LLM instruction)
+        custom_prompt = event.body  # plain text body = custom instruction
+        summary = await summarize(transcript, custom_prompt=custom_prompt)
+
+        # Build reply
+        plain, html = build_reply_body(transcript, summary)
+        await _send_reply_to_event(client, room, event, plain, html)
+
+    else:
+        # No audio reference → send static German reply
+        reply_text = "Ich reagiere nur auf Sprachnachrichten."
+        await _send_reply_to_event(client, room, event, reply_text)
+
+
 async def _send_reply(
     client: AsyncClient,
     room: MatrixRoom,
@@ -466,7 +584,83 @@ async def _send_reply(
     plain: str,
     html: str,
 ) -> None:
-    """Send a threaded reply to the original audio event."""
+    """Send a threaded reply to the original audio event (delegates to generic helper)."""
+    await _send_reply_to_event(client, room, event, plain, html)
+
+
+async def _send_error_reply(
+    client: AsyncClient,
+    room: MatrixRoom,
+    event: RoomMessageAudio,
+    message: str,
+) -> None:
+    """Send a plain error reply for user-visible failures (delegates to generic helper)."""
+    await _send_reply_to_event(client, room, event, message)
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers — audio download & threaded replies
+# ---------------------------------------------------------------------------
+
+async def _download_audio_from_mxc(
+    client: AsyncClient, mxc_url: str, event_id: str,
+) -> bytes | None:
+    """Download audio bytes from an MXC URL using MSC3916 authenticated download.
+
+    Returns ``None`` when the download fails or the URL is malformed.
+    """
+    if not mxc_url or not mxc_url.startswith("mxc://"):
+        logger.warning({"event": "download_bad_url", "event_id": event_id, "url": mxc_url})
+        return None
+
+    mxc_path = mxc_url[len("mxc://"):]
+    dl_url = f"{HOMESERVER_URL}/_matrix/client/v1/media/download/{mxc_path}"
+    access_token = client.access_token
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                dl_url,
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    logger.info({"event": "download_ok", "event_id": event_id, "bytes": len(data)})
+                    return data
+                body = await resp.text()
+                logger.warning({
+                    "event": "download_failed",
+                    "event_id": event_id,
+                    "status": resp.status,
+                    "body": body[:200],
+                })
+                return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning({"event": "download_exception", "event_id": event_id, "error": str(exc)})
+        return None
+
+
+async def _send_reply_to_event(
+    client: AsyncClient,
+    room: MatrixRoom,
+    event,  # RoomMessageAudio | RoomMessageText | any event with event_id
+    plain: str,
+    html: str | None = None,
+) -> None:
+    """Send a threaded reply to *any* event (audio, text, etc.).
+
+    Parameters
+    ----------
+    plain:
+        Plain-text body (always sent).
+    html:
+        HTML body (``org.matrix.custom.html``).  When ``None`` a minimal
+        HTML wrapper around the plain text is generated.
+    """
+    if html is None:
+        html = f"<p>{plain}</p>"
+
     content: dict[str, Any] = {
         "msgtype": "m.notice",
         "body": plain,
@@ -483,31 +677,7 @@ async def _send_reply(
         await client.room_send(room.room_id, "m.room.message", content)
         logger.info({"event": "reply_sent", "room_id": room.room_id, "event_id": event.event_id})
     except Exception as exc:  # noqa: BLE001
-        # Matrix send failure: log and continue — do not crash (design.md §4)
         logger.error({"event": "reply_failed", "room_id": room.room_id, "error": str(exc)})
-
-
-async def _send_error_reply(
-    client: AsyncClient,
-    room: MatrixRoom,
-    event: RoomMessageAudio,
-    message: str,
-) -> None:
-    """Send a plain error reply for user-visible failures."""
-    content: dict[str, Any] = {
-        "msgtype": "m.notice",
-        "body": message,
-        "m.relates_to": {
-            "rel_type": "m.thread",
-            "event_id": event.event_id,
-            "is_falling_back": True,
-            "m.in_reply_to": {"event_id": event.event_id},
-        },
-    }
-    try:
-        await client.room_send(room.room_id, "m.room.message", content)
-    except Exception as exc:  # noqa: BLE001
-        logger.error({"event": "error_reply_failed", "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------
@@ -567,6 +737,11 @@ async def run() -> None:
     client.add_event_callback(  # type: ignore[arg-type]
         lambda room, event: handle_audio_event(room, event, client),
         RoomMessageAudio,
+    )
+    # Text handler: @-mentions in any room, DMs, and audio-with-text messages
+    client.add_event_callback(  # type: ignore[arg-type]
+        lambda room, event: handle_text_event(room, event, client),
+        RoomMessageText,
     )
     # Auto-join: accept any room invite so the bot is present in bridged rooms
     client.add_event_callback(  # type: ignore[arg-type]
