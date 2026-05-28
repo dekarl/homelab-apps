@@ -274,56 +274,7 @@ const configMap = new k8s.core.v1.ConfigMap(
 )
 
 // ---------------------------------------------------------------------------
-// 5. ExternalSecret — GHCR pull secret
-//    Explicitly created because ExposedWebApp only auto-creates it when it
-//    creates the namespace. Since we pre-create the namespace and pass it in,
-//    we must create this manually.
-// ---------------------------------------------------------------------------
-
-const pullSecret = new k8s.apiextensions.CustomResource(
-  `${APP_NAME}-ghcr-pull-secret`,
-  {
-    apiVersion: "external-secrets.io/v1beta1",
-    kind: "ExternalSecret",
-    metadata: {
-      name: "ghcr-pull-secret",
-      namespace: NAMESPACE,
-      labels: { app: APP_NAME },
-    },
-    spec: {
-      refreshInterval: "1h",
-      secretStoreRef: {
-        name: "pulumi-esc",
-        kind: "ClusterSecretStore",
-      },
-      target: {
-        name: "ghcr-pull-secret",
-        creationPolicy: "Owner",
-        template: {
-          type: "kubernetes.io/dockerconfigjson",
-          engineVersion: "v2",
-          data: {
-            ".dockerconfigjson": `{"auths":{"ghcr.io":{"username":"{{ .github_username }}","password":"{{ .github_token }}","auth":"{{ printf "%s:%s" .github_username .github_token | b64enc }}"}}}`,
-          },
-        },
-      },
-      data: [
-        {
-          secretKey: "github_username",
-          remoteRef: { key: "github-username" },
-        },
-        {
-          secretKey: "github_token",
-          remoteRef: { key: "github-token" },
-        },
-      ],
-    },
-  },
-  { dependsOn: [ns] },
-)
-
-// ---------------------------------------------------------------------------
-// 6. Secret — Cloudflare credentials for the operator sidecar
+// 5. Secret — Cloudflare credentials for the operator sidecar
 // ---------------------------------------------------------------------------
 
 const cfSecret = new k8s.core.v1.Secret(
@@ -508,7 +459,7 @@ export const app = homelab.createExposedWebApp(
     tags: ["opencode", "router", "ai"],
   },
   {
-    dependsOn: [roleBinding, pullSecret, cfSecret, apiKeysSecret, configMap, adminSecret],
+    dependsOn: [roleBinding, cfSecret, apiKeysSecret, configMap, adminSecret],
   },
 )
 
