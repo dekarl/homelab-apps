@@ -1,8 +1,19 @@
 # homelab-apps
 
+> Part of [digitaleraluhut](https://github.com/digitaleraluhut) — the application layer. Each app deploys onto the [homelab](https://github.com/digitaleraluhut/homelab) cluster and connects to [local-ai](https://github.com/digitaleraluhut/local-ai) for inference, transcription, and image generation.
+
 Personal homelab app deployments — each app is a [Pulumi](https://www.pulumi.com/) project
 that consumes [`@mrsimpson/homelab-core-components`](https://www.npmjs.com/package/@mrsimpson/homelab-core-components)
 and deploys onto the homelab k3s cluster.
+
+## Apps
+
+| App | What it does |
+|-----|-------------|
+| [lobehub](./apps/lobehub/) | Self-hosted AI chat (LobeHub) with local LLM, web search, image generation |
+| [matrix](./apps/matrix/) | Matrix homeserver (Conduit) + WhatsApp/Signal bridges + voice transcription bot |
+| [opencode-router](./apps/opencode-router/) | Per-user isolated OpenCode instances with Cloudflare routing |
+| [aftertouch](./apps/aftertouch/) | Local cloud replacement for Bose SoundTouch speakers |
 
 ## Repository layout
 
