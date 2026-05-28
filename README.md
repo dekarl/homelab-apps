@@ -35,6 +35,32 @@ GitHub Actions deploys to the cluster by calling the reusable
 [`deploy-to-cluster.yml`](https://github.com/digitaleraluhut/homelab/blob/main/.github/workflows/deploy-to-cluster.yml)
 workflow from the `digitaleraluhut/homelab` repo.
 
+## Security & Secrets
+
+### How secrets are stored
+
+| What | Mechanism | Tracked in git? |
+|------|-----------|-----------------|
+| Pulumi stack config (passwords, tokens, keys) | Pulumi Cloud AES-256-GCM encryption (`secure:` values) | No — `Pulumi.dev.yaml` is gitignored |
+| Infrastructure-specific plaintext config (node IPs, hostnames) | `Pulumi.dev.yaml` on local machine only | No — gitignored |
+| Example config structure | `Pulumi.dev.yaml.example` per app | Yes — placeholders only |
+
+### Local setup on a new machine
+
+```bash
+# 1. Authenticate with Pulumi Cloud (restores all encrypted stack config)
+pulumi login
+
+# 2. For each app, select the stack — Pulumi pulls config from the cloud automatically
+cd apps/<name>
+pulumi stack select dev
+
+# 3. Fill in plaintext values (node IP, hostname, etc.) from the example file
+cp Pulumi.dev.yaml.example Pulumi.dev.yaml
+# edit Pulumi.dev.yaml — replace <placeholders> with your values
+# e.g.: pulumi config set aftertouch:nodeIp 192.168.x.x --stack dev
+```
+
 ## Required repository secrets
 
 | Secret | Description |
