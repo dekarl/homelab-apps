@@ -10,9 +10,10 @@ config:
   # All values use the "lobehub:" namespace prefix (matching pulumi.Config("lobehub") in src/index.ts).
   # Set with: pulumi config set lobehub:<key> <value>
 
-  # Stack reference to homelab base stack (provides tunnelCname, cloudflareZoneId, domain)
+  # Stack reference to your homelab base stack (provides tunnelCname, cloudflareZoneId, domain).
+  # Required — no default. Set with:
+  #   pulumi config set lobehub:homelabStack <your-pulumi-org>/homelab/dev
   lobehub:homelabStack:
-    value: digitaleraluhut/homelab/dev
 
   # Image reference — official Docker Hub image: docker.io/lobehub/lobehub
   # Update with: pulumi config set lobehub:lobehubImage lobehub/lobehub:<version>

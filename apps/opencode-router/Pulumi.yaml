@@ -10,9 +10,10 @@ config:
   # All values use the "code:" namespace prefix (matching the pulumi.Config("code") in src/index.ts)
   # Set with: pulumi config set code:<key> <value>
 
-  # Stack reference to homelab base stack (provides tunnelCname, cloudflareZoneId, domain)
+  # Stack reference to your homelab base stack (provides tunnelCname, cloudflareZoneId, domain).
+  # Required — no default. Set with:
+  #   pulumi config set code:homelabStack <your-pulumi-org>/homelab/dev
   code:homelabStack:
-    value: mrsimpson/homelab/dev
 
   # Image references — update when new images are built
   # pulumi config set code:routerImage ghcr.io/mrsimpson/opencode-router:<tag>

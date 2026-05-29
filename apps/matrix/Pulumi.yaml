@@ -10,9 +10,10 @@ config:
   # All values use the "matrix:" namespace prefix (matching pulumi.Config("matrix") in src/index.ts).
   # Set with: pulumi config set matrix:<key> <value>
 
-  # Stack reference to homelab base stack (provides tunnelCname, cloudflareZoneId, domain)
+  # Stack reference to your homelab base stack (provides tunnelCname, cloudflareZoneId, domain).
+  # Required — no default. Set with:
+  #   pulumi config set matrix:homelabStack <your-pulumi-org>/homelab/dev
   matrix:homelabStack:
-    value: digitaleraluhut/homelab/dev
 
   # Conduit Matrix homeserver image
   # Available tags: https://hub.docker.com/r/matrixconduit/matrix-conduit/tags

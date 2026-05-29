@@ -38,13 +38,70 @@ homelab-apps/
 ## How it works
 
 Each app in `apps/<name>/` is a standalone Pulumi project.  It reads shared
-infrastructure outputs (domain, tunnel CNAME, Cloudflare zone) via
-`StackReference("digitaleraluhut/homelab/dev")` and manages its own Kubernetes resources
+infrastructure outputs (domain, tunnel CNAME, Cloudflare zone) via a
+`StackReference` to your homelab base stack and manages its own Kubernetes resources
 in an isolated Pulumi state.
 
 GitHub Actions deploys to the cluster by calling the reusable
 [`deploy-to-cluster.yml`](https://github.com/digitaleraluhut/homelab/blob/main/.github/workflows/deploy-to-cluster.yml)
 workflow from the `digitaleraluhut/homelab` repo.
+
+## Deploying to your own homelab
+
+These apps are designed to be forkable. They depend on a separate
+[homelab](https://github.com/digitaleraluhut/homelab) base stack that provides shared
+infrastructure (Cloudflare tunnel, domain, zone ID). You need to run that first.
+
+### Prerequisites
+
+1. A running k3s (or compatible) cluster
+2. The [homelab](https://github.com/digitaleraluhut/homelab) base stack deployed and its
+   Pulumi stack outputs available (exports `domain`, `cloudflareZoneId`, `tunnelId`)
+3. A [Pulumi Cloud](https://app.pulumi.com) account (free tier works)
+4. `pulumi` CLI authenticated: `pulumi login`
+
+### One-time setup per app
+
+```bash
+cd apps/<name>
+
+# Create your stack
+pulumi stack init dev
+
+# Point it at YOUR homelab base stack (replace with your Pulumi org)
+pulumi config set <app>:homelabStack <your-pulumi-org>/homelab/dev
+
+# Copy the example config and fill in your values
+cp Pulumi.dev.yaml.example Pulumi.dev.yaml
+# Edit Pulumi.dev.yaml — replace all <placeholder> values
+# Then import it:
+pulumi config --path < Pulumi.dev.yaml
+
+# Set required secrets (see Pulumi.dev.yaml.example comments for what's needed)
+pulumi config set <app>:someSecret <value> --secret
+
+# Deploy
+pulumi up
+```
+
+> **Note:** `homelabStack` has no default — Pulumi will error immediately if it is not set,
+> preventing silent cross-org stack references.
+
+### CI/CD with GitHub Actions
+
+Fork both repos ([homelab](https://github.com/digitaleraluhut/homelab) and this one),
+then add these secrets to your fork of `homelab-apps`:
+
+| Secret | How to get it |
+|--------|---------------|
+| `PULUMI_ACCESS_TOKEN` | Pulumi Cloud → Access Tokens |
+| `KUBECONFIG` | `bash scripts/create-kubeconfig.sh <app>` from the homelab repo, then `base64 -w0` |
+| `TS_OAUTH_CLIENT_ID` | Tailscale admin → OAuth clients (`tag:ci`) |
+| `TS_OAUTH_CLIENT_SECRET` | Same OAuth client |
+
+The deploy workflows call a reusable
+[`deploy-to-cluster.yml`](https://github.com/digitaleraluhut/homelab/blob/main/.github/workflows/deploy-to-cluster.yml)
+from the homelab repo — update the `uses:` line in each workflow file to point to your fork.
 
 ## Security & Secrets
 

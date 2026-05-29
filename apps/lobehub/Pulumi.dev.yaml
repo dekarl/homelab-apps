@@ -1,5 +1,5 @@
 config:
-  lobehub:homelabStack: <your-pulumi-org>/homelab/dev
+  lobehub:homelabStack: mrsimpson/homelab/dev
   # Image reference — official upstream image from GitHub Container Registry.
   # Update to latest: pulumi config set lobehub:lobehubImage lobehub/lobehub:<tag>
   lobehub:lobehubImage: lobehub/lobehub:2.1.57

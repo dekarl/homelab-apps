@@ -2,7 +2,7 @@ config:
   code:routerImage: ghcr.io/mrsimpson/opencode-router:0.0.1-main.62c9b75
   code:cfOperatorImage: ghcr.io/mrsimpson/opencode-cloudflare-operator:0.1.0-main.a3c8a0c
   code:opencodeImage: ghcr.io/mrsimpson/opencode:1.14.20-main.1d9cc13
-  code:homelabStack: <your-pulumi-org>/homelab/dev
+  code:homelabStack: mrsimpson/homelab/dev
   cloudflare:apiToken:
     secure: AAABAHpX+bs29JxwbLtL7Cu+4PeyLIFW8m3sAmwgIPsTJvuiynbDXfOa05NYvVTZBjwuVaiRuwtq4t3qhXFipKRKmGRU4c7q
   code:openrouterFreeApiKey:
@@ -15,3 +15,5 @@ config:
     secure: AAABAIUy8CGBs6CCNVgfaLAVs6Qe1U8TylhNtI9fu0db9LqKUptsIke6XkjitlF48BWj+RdY3xAA5YVLUwfOq0T70mrjgRPIXx5OGQ==
   code:adminSecret:
     secure: AAABAHjHA+EMG70Ps5Gj4klUqgZQHbDgJ0kzEKlH37vjJPr21YwQK6k0PyTE8csi2hJqG56DUQvjFoMuS1R1aSZIFr9QqrxLNLVZm5C3Gjn5bmZjv9KbwVEeTNa7Fe85
+  oauth2-proxy:developersEmails:
+    secure: AAABACZevhbcTdZlSYs/fJs1U0GF7/mMykUp5hhQSgiTi0zEfZaCO819Ur8PSws/VZ0aqTW1ERJkt2MwlXWdb3HUXebB7CGFBm/zvLcPaN6y+aof4Uist/iN9Dq6ICQq7nc620fQCo01Fkbej7XycJsW7xLsrontxE0iGJU3UCdNU1jJ8gqvhBzg4c/XaLnATWA5or91jMBjObtm2vq8g6jLI3YLKg8as5mgIDYxm4K4x0b7hKEbXOr9Yt5EsBL1qvWBdVv5HQ==

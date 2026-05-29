@@ -1,0 +1,17 @@
+config:
+  # Image reference — pinned to a specific version from GHCR.
+  aftertouch:image: ghcr.io/gesellix/bose-soundtouch:0.86
+  # Management credentials (set as secrets via: pulumi config set aftertouch:mgmtUsername <val> --secret)
+  aftertouch:mgmtUsername:
+    secure: AAABAKWV2MssF0th7F5LPAgpHMa4lrzP2rgTxLSv59lIiARSXzFQt7+z
+  aftertouch:mgmtPassword:
+    secure: AAABABTKuCDbNhbl6erzbWLVCUsYGzLxknZFJTMGNfrYVC/YYAiSt0cV7DS0O68szy9BoZHpL1AJOrkZlnpmRg==
+  # Optional: comma-separated list of known speaker IPs for faster discovery
+  # Replace with your own speaker IPs (example: "192.168.x.x,192.168.x.x")
+  aftertouch:preferredDevices: 192.168.13.110,192.168.13.71
+  # Node IP — LAN IP of the k8s node (used for NodePort service URLs and Fritz.Box DNS)
+  aftertouch:nodeIp: 192.168.13.5
+  # Node hostname — used for nodeSelector and default appHostname
+  aftertouch:nodeName: flinker
+  # Optional: override the Fritz.Box DNS hostname (default: aftertouch.<nodeName>.fritz.box)
+  # aftertouch:appHostname: aftertouch.<your-node-name>.fritz.box

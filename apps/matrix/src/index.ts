@@ -19,7 +19,7 @@ const NAMESPACE = APP_NAME;
 const cfg = new pulumi.Config(APP_NAME);
 
 // Stack reference to homelab base stack — provides tunnelCname, cloudflareZoneId, domain
-const homelabStackName = cfg.get('homelabStack') ?? 'digitaleraluhut/homelab/dev';
+const homelabStackName = cfg.require('homelabStack');
 const homelabStack = new pulumi.StackReference(homelabStackName);
 
 const domain = homelabStack.getOutput('domain') as pulumi.Output<string>;
