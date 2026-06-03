@@ -1,5 +1,7 @@
 import * as pulumi from "@pulumi/pulumi"
 import * as k8s from "@pulumi/kubernetes"
+import * as fs from "fs"
+import * as path from "path"
 import { AuthType, createHomelabContextFromStack } from "@mrsimpson/homelab-core-components"
 import { fetchFreeModels, fetchPaidModels } from "./models"
 
@@ -351,6 +353,103 @@ const historyPvc = new k8s.core.v1.PersistentVolumeClaim(
     // deployment (first consumer) can be created and trigger provisioning.
     customTimeouts: { create: "1s" },
   },
+)
+
+// ---------------------------------------------------------------------------
+// 6d. Grafana dashboard — sync Job writes to shared PVC owned by homelab
+//     The dashboard JSON lives in this repo at grafana/opencode-token-metrics.json.
+//     We embed it in a ConfigMap in the "observability" namespace (where Grafana runs),
+//     then run a one-shot Job that copies it onto a shared ReadWriteMany PVC.
+//     The PVC is created by the homelab observability stack (not here), so it
+//     already exists when this Job runs. The homelab/Grafana stack mounts it
+//     read-only — dashboards appear within 30s via the provisioner hot-reload.
+// ---------------------------------------------------------------------------
+
+// ConfigMap in observability namespace — carries the dashboard JSON.
+// The sync Job reads from this ConfigMap so the dashboard stays up to date on every deploy.
+const dashboardConfigMap = new k8s.core.v1.ConfigMap(
+  "opencode-dashboards-cm",
+  {
+    metadata: {
+      name: "opencode-dashboards",
+      namespace: "observability",
+      labels: { app: APP_NAME, "managed-by": "homelab-apps" },
+    },
+    data: {
+      "opencode-token-metrics.json": fs.readFileSync(
+        path.join(__dirname, "../grafana/opencode-token-metrics.json"),
+        "utf-8",
+      ),
+    },
+  },
+)
+
+// Sync Job — runs on every pulumi up, writes dashboard JSON from ConfigMap to PVC.
+// The PVC is owned by the homelab observability stack (grafana-app-dashboards in
+// observability namespace), so it already exists when this Job runs.
+// Timestamp-based name forces a new Job each deploy (Jobs are immutable once created).
+// ttlSecondsAfterFinished: 300 cleans up completed Jobs after 5 minutes.
+const dashboardSyncJob = new k8s.batch.v1.Job(
+  "opencode-dashboard-sync",
+  {
+    metadata: {
+      name: `opencode-dashboard-sync-${Date.now()}`,
+      namespace: "observability",
+      labels: { app: APP_NAME, "managed-by": "homelab-apps" },
+    },
+    spec: {
+      ttlSecondsAfterFinished: 300,
+      template: {
+        metadata: {
+          labels: { app: `${APP_NAME}-dashboard-sync` },
+        },
+        spec: {
+          restartPolicy: "OnFailure",
+          securityContext: {
+            runAsNonRoot: true,
+            runAsUser: 65534,
+            runAsGroup: 65534,
+            fsGroup: 65534,
+            seccompProfile: { type: "RuntimeDefault" },
+          },
+          containers: [
+            {
+              name: "sync",
+              image: "busybox:1.36",
+              command: [
+                "sh",
+                "-c",
+                "rm -rf /output/dashboards && cp /dashboards/opencode-token-metrics.json /output/opencode-token-metrics.json && echo 'dashboard sync complete'",
+              ],
+              securityContext: {
+                allowPrivilegeEscalation: false,
+                capabilities: { drop: ["ALL"] },
+              },
+              volumeMounts: [
+                { name: "dashboards-src", mountPath: "/dashboards" },
+                { name: "dashboards-out", mountPath: "/output" },
+              ],
+              resources: {
+                requests: { cpu: "10m", memory: "16Mi" },
+                limits: { cpu: "50m", memory: "32Mi" },
+              },
+            },
+          ],
+          volumes: [
+            {
+              name: "dashboards-src",
+              configMap: { name: "opencode-dashboards" },
+            },
+            {
+              name: "dashboards-out",
+              persistentVolumeClaim: { claimName: "grafana-app-dashboards" },
+            },
+          ],
+        },
+      },
+    },
+  },
+  { dependsOn: [dashboardConfigMap] },
 )
 
 // ---------------------------------------------------------------------------

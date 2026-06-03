@@ -1,0 +1,80 @@
+name: Build opencode image
+
+# Builds the homelab-customised opencode image that bakes in the router plugin
+# (including token-metrics), default config, tools, and MCP servers on top of
+# the upstream ghcr.io/anomalyco/opencode base.
+#
+# Base image tag pinned in apps/opencode-router/docker/opencode/.base-version.
+# Plugin source lives in apps/opencode-router/docker/opencode/plugins/.
+#
+# After a successful build the Pulumi.dev.yaml is updated so the next deploy
+# picks up the new image automatically.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - apps/opencode-router/docker/**
+      - .github/workflows/build-opencode-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/mrsimpson/opencode
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GH_PAT }}" | docker login ghcr.io \
+            -u mrsimpson --password-stdin
+
+      - name: Compute image tag
+        id: version
+        run: |
+          SHA_SHORT=${GITHUB_SHA::7}
+          BASE_TAG=$(cat apps/opencode-router/docker/opencode/.base-version | tr -d '[:space:]')
+          TAG="homelab-${GITHUB_REF_NAME}.${SHA_SHORT}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "base=${BASE_TAG}" >> $GITHUB_OUTPUT
+          echo "Building ${{ env.IMAGE_NAME }}:${TAG} on top of upstream ${BASE_TAG}"
+
+      - name: Build
+        run: |
+          docker build \
+            --build-arg BASE_VERSION=${{ steps.version.outputs.base }} \
+            --file apps/opencode-router/docker/opencode/Dockerfile \
+            -t ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }} \
+            -t ${{ env.IMAGE_NAME }}:latest \
+            apps/opencode-router/docker
+
+      - name: Push
+        run: |
+          docker push ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}
+          docker push ${{ env.IMAGE_NAME }}:latest
+          echo "Pushed ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}"
+
+      - name: Update Pulumi.dev.yaml with new image tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          for i in 1 2 3; do
+            git pull --rebase origin main
+            IMAGE="${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}"
+            # Update opencodeImage in Pulumi.dev.yaml
+            sed -i "s|code:opencodeImage:.*|code:opencodeImage: ${IMAGE}|" \
+              apps/opencode-router/Pulumi.dev.yaml
+            git add apps/opencode-router/Pulumi.dev.yaml
+            git diff --cached --quiet && break
+            git commit -m "chore(deploy): update opencodeImage to ${{ steps.version.outputs.tag }}"
+            git push && break || git reset HEAD~1
+          done
