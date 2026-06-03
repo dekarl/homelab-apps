@@ -1,0 +1,655 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+// Store original env
+const originalEnv = { ...process.env }
+const testEnvKeys = [
+  "CF_API_TOKEN",
+  "CF_ZONE_ID",
+  "CF_TUNNEL_ID",
+  "DOMAIN",
+  "ROUTER_SERVICE_URL",
+  "ROUTER_ADMIN_SECRET",
+  "WATCH_NAMESPACE",
+  "POD_LABEL_SELECTOR",
+  "INGRESSROUTE_NAMESPACE",
+  "OAUTH2_CHAIN_MIDDLEWARE",
+  "ROUTER_SERVICE_NAME",
+  "HEALTH_PORT",
+  "ROUTE_SUFFIX",
+  "EDITOR_ROUTE_PREFIX",
+]
+
+// ---------------------------------------------------------------------------
+// Mocks (must be before imports)
+// ---------------------------------------------------------------------------
+
+// Mock config - this will override the real config module
+vi.mock("../src/config.js", () => ({
+  config: {
+    opencodePort: 4096,
+    watchNamespace: "code",
+    podLabelSelector: "app.kubernetes.io/managed-by=opencode-router",
+    sessionHashLabel: "opencode.ai/session-hash",
+    cfApiToken: "test-token",
+    cfZoneId: "zone123",
+    cfTunnelId: "tunnel123",
+    domain: "no-panic.org",
+    routeSuffix: "-oc",
+    routerServiceUrl: "http://traefik-controller.traefik-system.svc.cluster.local:80",
+    routerAdminUrl: "http://code.code.svc.cluster.local:80",
+    routerAdminSecret: "test-admin-secret",
+    healthPort: 8080,
+    ingressRouteNamespace: "code",
+    oauth2ChainMiddleware: "code-oauth2-chain",
+    routerServiceName: "code",
+    attachRoutePrefix: "attach-",
+    attachServicePort: 4096,
+    attachServiceName: "code-attach",
+    editorRoutePrefix: "editor-",
+  },
+  sessionHostname: (hash: string) => `${hash}-oc.no-panic.org`,
+  sessionPortHostname: (hash: string, port: number) => `${port}-${hash}-oc.no-panic.org`,
+  sessionAttachHostname: (hash: string) => `attach-${hash}-oc.no-panic.org`,
+  sessionEditorHostname: (hash: string) => `editor-${hash}-oc.no-panic.org`,
+  DEV_PORT_ALLOWLIST: new Set([3000, 3001, 4321, 5173, 5174, 8000, 8080, 8888]),
+}))
+
+// Mock state for assertions
+const cfDnsRecords: Map<string, { id: string; name: string; content: string }> = new Map()
+const cfTunnelIngress: { hostname?: string; service: string }[] = [
+  { service: "http://traefik-controller.traefik-system.svc.cluster.local:80" },
+]
+const k8sRequests: { method: string; path: string; body?: unknown }[] = []
+
+// Per-session port store (simulates router portStore for operator fetch tests)
+const routerPortStore: Map<string, number[]> = new Map()
+
+function resetState() {
+  cfDnsRecords.clear()
+  while (cfTunnelIngress.length > 1) {
+    cfTunnelIngress.pop()
+  }
+  k8sRequests.length = 0
+  routerPortStore.clear()
+}
+
+// Mock fetch for Cloudflare API + router ports API
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockFetch = vi.fn(async (url: any, options?: any) => {
+  const urlStr = typeof url === "string" ? url : url.toString()
+  const body = options?.body ? JSON.parse(options.body) : undefined
+
+  // Router ports API: GET /api/sessions/:hash/ports
+  const portsMatch = urlStr.match(/\/api\/sessions\/([a-f0-9]{12})\/ports$/)
+  if (portsMatch && (!options?.method || options.method === "GET")) {
+    const hash = portsMatch[1]
+    const ports = routerPortStore.get(hash) ?? []
+    return new Response(JSON.stringify({ ports }))
+  }
+
+  if (urlStr.match(/\/zones\/zone123$/) && options?.method === "GET") {
+    return new Response(JSON.stringify({ success: true, result: { account: { id: "account123" } } }))
+  }
+
+  if (urlStr.includes("/dns_records")) {
+    const urlObj = new URL(urlStr)
+
+    if (options?.method === "GET") {
+      const name = urlObj.searchParams.get("name")
+      if (name) {
+        const record = cfDnsRecords.get(name)
+        return new Response(JSON.stringify({ success: true, result: record ? [record] : [] }))
+      }
+      return new Response(JSON.stringify({ success: true, result: Array.from(cfDnsRecords.values()) }))
+    }
+
+    if (options?.method === "POST") {
+      const id = `dns-${Date.now()}`
+      cfDnsRecords.set(body.name, { id, name: body.name, content: body.content })
+      return new Response(JSON.stringify({ success: true, result: { id, name: body.name } }))
+    }
+
+    if (options?.method === "DELETE") {
+      const id = urlStr.split("/dns_records/")[1]
+      for (const [name, record] of cfDnsRecords) {
+        if (record.id === id) {
+          cfDnsRecords.delete(name)
+          break
+        }
+      }
+      return new Response(JSON.stringify({ success: true }))
+    }
+  }
+
+  if (urlStr.includes("/configurations")) {
+    if (options?.method === "GET") {
+      return new Response(JSON.stringify({ success: true, result: { config: { ingress: cfTunnelIngress } } }))
+    }
+    if (options?.method === "PUT") {
+      cfTunnelIngress.length = 0
+      cfTunnelIngress.push(...body.config.ingress)
+      return new Response(JSON.stringify({ success: true }))
+    }
+  }
+
+  return new Response(JSON.stringify({ success: false, errors: [{ message: "Not found" }] }), { status: 404 })
+})
+
+Object.defineProperty(globalThis, "fetch", { value: mockFetch, configurable: true, writable: true })
+
+// Mock Kubernetes client
+vi.mock("@kubernetes/client-node", () => {
+  function MockKubeConfig() {}
+  MockKubeConfig.prototype.loadFromDefault = vi.fn()
+  MockKubeConfig.prototype.loadFromCluster = vi.fn()
+  MockKubeConfig.prototype.makeApiClient = vi.fn().mockReturnValue({
+    // CustomObjectsApi methods
+    createNamespacedCustomObject: vi.fn().mockImplementation(async (opts: any) => {
+      k8sRequests.push({ method: "POST", path: `/${opts.namespace}/${opts.plural}`, body: opts.body })
+      return { body: {} }
+    }),
+    deleteNamespacedCustomObject: vi.fn().mockImplementation(async (opts: any) => {
+      k8sRequests.push({ method: "DELETE", path: `/${opts.namespace}/${opts.plural}/${opts.name}` })
+      return { body: {} }
+    }),
+    listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [] }),
+    // CoreV1Api methods (used by reconcileOnStartup)
+    listNamespacedPod: vi.fn().mockResolvedValue({ items: [] }),
+    listNamespacedPersistentVolumeClaim: vi.fn().mockResolvedValue({ items: [] }),
+  })
+
+  return {
+    KubeConfig: MockKubeConfig,
+    Watch: function MockWatch() {},
+    CustomObjectsApi: {},
+    CoreV1Api: {},
+  }
+})
+
+// Mock http and fs
+vi.mock("node:http", () => ({
+  default: {
+    createServer: vi.fn(() => ({ listen: vi.fn(), close: vi.fn() })),
+  },
+}))
+
+vi.mock("node:fs", () => ({
+  default: { existsSync: vi.fn(() => false) },
+  existsSync: vi.fn(() => false),
+}))
+
+// ---------------------------------------------------------------------------
+// Import modules under test
+// ---------------------------------------------------------------------------
+
+import * as cloudflare from "../src/cloudflare.js"
+import * as ingressroute from "../src/ingressroute.js"
+import { fetchSessionPorts } from "../src/index.js"
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const HASH = "191adb184b2b"
+const HOSTNAME = `${HASH}-oc.no-panic.org`
+const ATTACH_HOSTNAME = `attach-${HASH}-oc.no-panic.org`
+const EDITOR_HOSTNAME = `editor-${HASH}-oc.no-panic.org`
+
+const mockConfig = {
+  oauth2ChainMiddleware: "code-oauth2-chain",
+}
+
+function pod(hash = HASH) {
+  return {
+    metadata: {
+      name: `opencode-session-${hash}`,
+      labels: {
+        "opencode.ai/session-hash": hash,
+        "app.kubernetes.io/managed-by": "opencode-router",
+      },
+    },
+  } as const
+}
+
+function pvc(hash = HASH) {
+  return {
+    metadata: {
+      name: `opencode-session-${hash}`,
+      labels: {
+        "opencode.ai/session-hash": hash,
+        "app.kubernetes.io/managed-by": "opencode-router",
+      },
+    },
+  } as const
+}
+
+// ---------------------------------------------------------------------------
+// Setup
+// ---------------------------------------------------------------------------
+
+beforeEach(() => {
+  resetState()
+  vi.clearAllMocks()
+})
+
+afterEach(() => {
+  // Restore original env - remove test vars, restore originals
+  for (const key of Object.keys(process.env)) {
+    if (testEnvKeys.includes(key)) {
+      delete process.env[key]
+    }
+  }
+  for (const [key, value] of Object.entries(originalEnv)) {
+    if (testEnvKeys.includes(key)) {
+      process.env[key] = value
+    }
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Cloudflare API tests
+// ---------------------------------------------------------------------------
+
+describe("Cloudflare API (cloudflare.ts)", () => {
+  describe("findDnsRecord", () => {
+    it("returns null when no record exists", async () => {
+      const result = await cloudflare.findDnsRecord(HOSTNAME)
+      expect(result).toBeNull()
+    })
+
+    it("returns record id when exists", async () => {
+      cfDnsRecords.set(HOSTNAME, { id: "abc123", name: HOSTNAME, content: "tunnel.cfargotunnel.com" })
+      const result = await cloudflare.findDnsRecord(HOSTNAME)
+      expect(result).toBe("abc123")
+    })
+  })
+
+  describe("createDnsRecord", () => {
+    it("creates DNS record when none exists", async () => {
+      await cloudflare.createDnsRecord(HOSTNAME, "tunnel123.cfargotunnel.com")
+      expect(cfDnsRecords.has(HOSTNAME)).toBe(true)
+      expect(cfDnsRecords.get(HOSTNAME)?.content).toBe("tunnel123.cfargotunnel.com")
+    })
+
+    it("skips when record already exists", async () => {
+      cfDnsRecords.set(HOSTNAME, { id: "existing", name: HOSTNAME, content: "old.cfargotunnel.com" })
+      await cloudflare.createDnsRecord(HOSTNAME, "new.cfargotunnel.com")
+      expect(cfDnsRecords.get(HOSTNAME)?.content).toBe("old.cfargotunnel.com")
+    })
+  })
+
+  describe("deleteDnsRecord", () => {
+    it("deletes existing record", async () => {
+      cfDnsRecords.set(HOSTNAME, { id: "abc123", name: HOSTNAME, content: "tunnel.cfargotunnel.com" })
+      await cloudflare.deleteDnsRecord(HOSTNAME)
+      expect(cfDnsRecords.has(HOSTNAME)).toBe(false)
+    })
+
+    it("handles non-existent record gracefully", async () => {
+      await expect(cloudflare.deleteDnsRecord(HOSTNAME)).resolves.not.toThrow()
+    })
+  })
+
+  describe("createTunnelRoute", () => {
+    it("adds hostname to tunnel ingress", async () => {
+      await cloudflare.createTunnelRoute(HOSTNAME)
+      expect(cfTunnelIngress.some((r) => r.hostname === HOSTNAME)).toBe(true)
+    })
+
+    it("skips if route already exists", async () => {
+      cfTunnelIngress.push({
+        hostname: HOSTNAME,
+        service: "http://traefik-controller.traefik-system.svc.cluster.local:80",
+      })
+      await cloudflare.createTunnelRoute(HOSTNAME)
+      // Route still exists, no error
+      expect(cfTunnelIngress.some((r) => r.hostname === HOSTNAME)).toBe(true)
+    })
+  })
+
+  describe("deleteTunnelRoute", () => {
+    it("removes hostname from tunnel ingress", async () => {
+      cfTunnelIngress.push({
+        hostname: HOSTNAME,
+        service: "http://traefik-controller.traefik-system.svc.cluster.local:80",
+      })
+      await cloudflare.deleteTunnelRoute(HOSTNAME)
+      expect(cfTunnelIngress.some((r) => r.hostname === HOSTNAME)).toBe(false)
+    })
+
+    it("handles non-existent route gracefully", async () => {
+      await expect(cloudflare.deleteTunnelRoute(HOSTNAME)).resolves.not.toThrow()
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// IngressRoute tests
+// ---------------------------------------------------------------------------
+
+describe("IngressRoute API (ingressroute.ts)", () => {
+  describe("createIngressRoutes", () => {
+    it("creates app and signin IngressRoutes", async () => {
+      await ingressroute.createIngressRoutes(HOSTNAME)
+      const appRequest = k8sRequests.find(
+        (r) => r.path.includes("ingressroutes") && (r.body as any)?.metadata?.name?.includes("oc-app"),
+      )
+      const signinRequest = k8sRequests.find(
+        (r) => r.path.includes("ingressroutes") && (r.body as any)?.metadata?.name?.includes("oc-signin"),
+      )
+      expect(appRequest?.method).toBe("POST")
+      expect(signinRequest?.method).toBe("POST")
+    })
+
+    it("sets correct host in IngressRoute spec", async () => {
+      await ingressroute.createIngressRoutes(HOSTNAME)
+      const appRequest = k8sRequests.find(
+        (r) => r.method === "POST" && (r.body as any)?.metadata?.name?.includes("oc-app"),
+      )
+      expect(appRequest).toBeDefined()
+      expect(appRequest?.body).toMatchObject({
+        metadata: { name: expect.stringContaining("oc-app") },
+        spec: {
+          routes: [{ match: expect.stringContaining(HOSTNAME) }],
+        },
+      })
+    })
+
+    it("adds oauth2 chain middleware to app route", async () => {
+      await ingressroute.createIngressRoutes(HOSTNAME)
+      const appRequest = k8sRequests.find(
+        (r) => r.method === "POST" && (r.body as any)?.metadata?.name?.includes("oc-app"),
+      )
+      expect(appRequest).toBeDefined()
+      expect(appRequest?.body).toMatchObject({
+        spec: { routes: [{ middlewares: [{ name: mockConfig.oauth2ChainMiddleware }] }] },
+      })
+    })
+  })
+
+  describe("deleteIngressRoutes", () => {
+    it("deletes both IngressRoutes", async () => {
+      await ingressroute.deleteIngressRoutes(HOSTNAME)
+      const appDelete = k8sRequests.find((r) => r.path.includes("oc-app") && r.method === "DELETE")
+      const signinDelete = k8sRequests.find((r) => r.path.includes("oc-signin") && r.method === "DELETE")
+      expect(appDelete).toBeDefined()
+      expect(signinDelete).toBeDefined()
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Integration: Full session lifecycle
+// ---------------------------------------------------------------------------
+
+describe("Full session lifecycle", () => {
+  describe("New session (pod added)", () => {
+    it("creates DNS, tunnel route, and IngressRoutes", async () => {
+      await cloudflare.createDnsRecord(HOSTNAME, "tunnel123.cfargotunnel.com")
+      await cloudflare.createTunnelRoute(HOSTNAME)
+      await ingressroute.createIngressRoutes(HOSTNAME)
+      expect(cfDnsRecords.has(HOSTNAME)).toBe(true)
+      expect(cfTunnelIngress.some((r) => r.hostname === HOSTNAME)).toBe(true)
+      expect(k8sRequests.filter((r) => r.method === "POST" && r.path.includes("ingressroutes")).length).toBe(2)
+    })
+  })
+
+  describe("Session stop (pod deleted) - DNS should be preserved", () => {
+    beforeEach(async () => {
+      await cloudflare.createDnsRecord(HOSTNAME, "tunnel123.cfargotunnel.com")
+      await cloudflare.createTunnelRoute(HOSTNAME)
+      await ingressroute.createIngressRoutes(HOSTNAME)
+      await cloudflare.deleteTunnelRoute(HOSTNAME)
+      await ingressroute.deleteIngressRoutes(HOSTNAME)
+      k8sRequests.length = 0
+    })
+
+    it("DNS is preserved after stop", async () => {
+      expect(cfDnsRecords.has(HOSTNAME)).toBe(true)
+    })
+
+    it("tunnel route is removed after stop", async () => {
+      expect(cfTunnelIngress.some((r) => r.hostname === HOSTNAME)).toBe(false)
+    })
+  })
+
+  describe("Session resume (pod added again)", () => {
+    beforeEach(async () => {
+      await cloudflare.createDnsRecord(HOSTNAME, "tunnel123.cfargotunnel.com")
+      await cloudflare.createTunnelRoute(HOSTNAME)
+      await cloudflare.deleteTunnelRoute(HOSTNAME)
+    })
+
+    it("reuses existing DNS (no creation)", async () => {
+      await cloudflare.createDnsRecord(HOSTNAME, "tunnel123.cfargotunnel.com")
+      expect(cfDnsRecords.has(HOSTNAME)).toBe(true)
+    })
+
+    it("recreates tunnel route", async () => {
+      await cloudflare.createTunnelRoute(HOSTNAME)
+      expect(cfTunnelIngress.some((r) => r.hostname === HOSTNAME)).toBe(true)
+    })
+  })
+
+  describe("Session termination (PVC deleted) - full cleanup", () => {
+    beforeEach(async () => {
+      await cloudflare.createDnsRecord(HOSTNAME, "tunnel123.cfargotunnel.com")
+      await cloudflare.createTunnelRoute(HOSTNAME)
+      await cloudflare.deleteTunnelRoute(HOSTNAME)
+    })
+
+    it("deletes DNS record", async () => {
+      await cloudflare.deleteDnsRecord(HOSTNAME)
+      expect(cfDnsRecords.has(HOSTNAME)).toBe(false)
+    })
+
+    it("deletes tunnel route", async () => {
+      await cloudflare.createTunnelRoute(HOSTNAME)
+      await cloudflare.deleteTunnelRoute(HOSTNAME)
+      expect(cfTunnelIngress.some((r) => r.hostname === HOSTNAME)).toBe(false)
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Edge cases
+// ---------------------------------------------------------------------------
+
+describe("Edge cases", () => {
+  beforeEach(() => {
+    resetState()
+  })
+
+  it("multiple sessions are independent", async () => {
+    const hash1 = "aaaaaaaaaaaa"
+    const hash2 = "bbbbbbbbbbbb"
+    const host1 = `${hash1}-oc.no-panic.org`
+    const host2 = `${hash2}-oc.no-panic.org`
+
+    await cloudflare.createDnsRecord(host1, "tunnel.cfargotunnel.com")
+    await cloudflare.createDnsRecord(host2, "tunnel.cfargotunnel.com")
+    expect(cfDnsRecords.has(host1)).toBe(true)
+    expect(cfDnsRecords.has(host2)).toBe(true)
+
+    await cloudflare.createTunnelRoute(host1)
+    await cloudflare.deleteTunnelRoute(host1)
+    expect(cfDnsRecords.has(host1)).toBe(true)
+    expect(cfDnsRecords.has(host2)).toBe(true)
+  })
+
+  it("handles DNS already deleted on termination gracefully", async () => {
+    expect(cfDnsRecords.has(HOSTNAME)).toBe(false)
+    await expect(cloudflare.deleteDnsRecord(HOSTNAME)).resolves.not.toThrow()
+  })
+
+  it("handles tunnel already cleaned up gracefully", async () => {
+    expect(cfTunnelIngress.some((r) => r.hostname === HOSTNAME)).toBe(false)
+    await cloudflare.deleteTunnelRoute(HOSTNAME)
+    expect(cfTunnelIngress.some((r) => r.hostname === HOSTNAME)).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Attach IngressRoute tests
+// ---------------------------------------------------------------------------
+
+describe("Attach IngressRoute (ingressroute.ts)", () => {
+  describe("createAttachIngressRoute", () => {
+    it("creates a single attach IngressRoute (no signin route)", async () => {
+      await ingressroute.createAttachIngressRoute(ATTACH_HOSTNAME)
+      const attachRequest = k8sRequests.find(
+        (r) => r.method === "POST" && (r.body as any)?.metadata?.name?.includes("-attach"),
+      )
+      expect(attachRequest).toBeDefined()
+      // Only one IngressRoute (no signin), so only one POST
+      const posts = k8sRequests.filter((r) => r.method === "POST" && r.path.includes("ingressroutes"))
+      expect(posts.length).toBe(1)
+    })
+
+    it("sets correct host match in attach IngressRoute spec", async () => {
+      await ingressroute.createAttachIngressRoute(ATTACH_HOSTNAME)
+      const req = k8sRequests.find(
+        (r) => r.method === "POST" && (r.body as any)?.metadata?.name?.includes("-attach"),
+      )
+      expect(req?.body).toMatchObject({
+        spec: { routes: [{ match: expect.stringContaining(ATTACH_HOSTNAME) }] },
+      })
+    })
+
+    it("does NOT add oauth2 chain middleware to attach route", async () => {
+      await ingressroute.createAttachIngressRoute(ATTACH_HOSTNAME)
+      const req = k8sRequests.find(
+        (r) => r.method === "POST" && (r.body as any)?.metadata?.name?.includes("-attach"),
+      )
+      const route = (req?.body as any)?.spec?.routes?.[0]
+      expect(route).not.toHaveProperty("middlewares")
+    })
+
+    it("targets the attach Service on the attach port", async () => {
+      await ingressroute.createAttachIngressRoute(ATTACH_HOSTNAME)
+      const req = k8sRequests.find(
+        (r) => r.method === "POST" && (r.body as any)?.metadata?.name?.includes("-attach"),
+      )
+      expect(req?.body).toMatchObject({
+        spec: {
+          routes: [
+            {
+              services: [{ name: "code-attach", port: 4096 }],
+            },
+          ],
+        },
+      })
+    })
+  })
+
+  describe("deleteAttachIngressRoute", () => {
+    it("deletes the attach IngressRoute", async () => {
+      await ingressroute.deleteAttachIngressRoute(ATTACH_HOSTNAME)
+      const del = k8sRequests.find((r) => r.method === "DELETE" && r.path.includes("-attach"))
+      expect(del).toBeDefined()
+      // Only one DELETE (no signin to clean up)
+      const deletes = k8sRequests.filter((r) => r.method === "DELETE" && r.path.includes("ingressroutes"))
+      expect(deletes.length).toBe(1)
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Editor IngressRoute tests
+// ---------------------------------------------------------------------------
+
+describe("Editor routes", () => {
+  describe("createDnsRecord for editor hostname", () => {
+    it("creates DNS record for editor hostname", async () => {
+      await cloudflare.createDnsRecord(EDITOR_HOSTNAME, "tunnel123.cfargotunnel.com")
+      expect(cfDnsRecords.has(EDITOR_HOSTNAME)).toBe(true)
+      expect(cfDnsRecords.get(EDITOR_HOSTNAME)?.content).toBe("tunnel123.cfargotunnel.com")
+    })
+  })
+
+  describe("createTunnelRoute for editor hostname", () => {
+    it("adds editor hostname to tunnel ingress", async () => {
+      await cloudflare.createTunnelRoute(EDITOR_HOSTNAME)
+      expect(cfTunnelIngress.some((r) => r.hostname === EDITOR_HOSTNAME)).toBe(true)
+    })
+  })
+
+  describe("createIngressRoutes for editor hostname", () => {
+    it("creates app and signin IngressRoutes for editor hostname", async () => {
+      await ingressroute.createIngressRoutes(EDITOR_HOSTNAME)
+      const appRequest = k8sRequests.find(
+        (r) => r.path.includes("ingressroutes") && (r.body as any)?.metadata?.name?.includes("editor"),
+      )
+      const signinRequest = k8sRequests.find(
+        (r) => r.path.includes("ingressroutes") && (r.body as any)?.metadata?.name?.includes("editor"),
+      )
+      expect(appRequest?.method).toBe("POST")
+      expect(signinRequest?.method).toBe("POST")
+    })
+
+    it("sets correct host match in editor IngressRoute spec", async () => {
+      await ingressroute.createIngressRoutes(EDITOR_HOSTNAME)
+      const appRequest = k8sRequests.find(
+        (r) => r.method === "POST" && (r.body as any)?.metadata?.name?.includes("editor"),
+      )
+      expect(appRequest).toBeDefined()
+      expect(appRequest?.body).toMatchObject({
+        metadata: { name: expect.stringContaining("editor") },
+        spec: {
+          routes: [{ match: expect.stringContaining(EDITOR_HOSTNAME) }],
+        },
+      })
+    })
+
+    it("adds oauth2 chain middleware to editor app route", async () => {
+      await ingressroute.createIngressRoutes(EDITOR_HOSTNAME)
+      const appRequest = k8sRequests.find(
+        (r) => r.method === "POST" && (r.body as any)?.metadata?.name?.includes("editor") && (r.body as any)?.metadata?.name?.endsWith("-app"),
+      )
+      expect(appRequest).toBeDefined()
+      expect(appRequest?.body).toMatchObject({
+        spec: { routes: [{ middlewares: [{ name: mockConfig.oauth2ChainMiddleware }] }] },
+      })
+    })
+  })
+
+  describe("deleteIngressRoutes for editor hostname", () => {
+    it("deletes both editor IngressRoutes", async () => {
+      await ingressroute.deleteIngressRoutes(EDITOR_HOSTNAME)
+      const appDelete = k8sRequests.find((r) => r.path.includes("editor") && r.method === "DELETE")
+      expect(appDelete).toBeDefined()
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Router-based port polling (push-from-pod architecture)
+// ---------------------------------------------------------------------------
+
+describe("fetchSessionPorts", () => {
+  it("returns ports reported by the router for a session", async () => {
+    routerPortStore.set(HASH, [5173, 8080])
+    const ports = await fetchSessionPorts(HASH)
+    expect(ports).toEqual([5173, 8080])
+  })
+
+  it("returns empty array when no ports reported", async () => {
+    const ports = await fetchSessionPorts(HASH)
+    expect(ports).toEqual([])
+  })
+
+  it("sends x-admin-secret header in request", async () => {
+    routerPortStore.set(HASH, [3001])
+    await fetchSessionPorts(HASH)
+    const call = mockFetch.mock.calls.find((c: any[]) => String(c[0]).includes(`/api/sessions/${HASH}/ports`))
+    expect(call).toBeDefined()
+    expect(call![1]?.headers?.["x-admin-secret"]).toBe("test-admin-secret")
+  })
+
+  it("calls the correct router endpoint URL", async () => {
+    await fetchSessionPorts(HASH)
+    const call = mockFetch.mock.calls.find((c: any[]) => String(c[0]).includes(`/api/sessions/${HASH}/ports`))
+    expect(call).toBeDefined()
+    expect(String(call![0])).toContain(`/api/sessions/${HASH}/ports`)
+  })
+})

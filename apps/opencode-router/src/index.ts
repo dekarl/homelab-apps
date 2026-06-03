@@ -13,6 +13,7 @@ const ROUTER_PORT = 3000
 const OPENCODE_PORT = 4096
 const ATTACH_PORT = 4096
 const ATTACH_ROUTE_PREFIX = "attach-"
+const EDITOR_ROUTE_PREFIX = "editor-"
 /** Suffix appended to hash for session hostnames: <hash>-oc.<domain> */
 const ROUTE_SUFFIX = "-oc"
 /**
@@ -52,6 +53,7 @@ const homelab = createHomelabContextFromStack(homelabStack)
 const routerImage = cfg.require("routerImage")
 const cfOperatorImage = cfg.require("cfOperatorImage")
 const opencodeImage = cfg.require("opencodeImage")
+const editorImage = cfg.get("editorImage") ?? "ghcr.io/mrsimpson/opencode-editor:latest"
 const chromiumImage = cfg.get("chromiumImage") ?? "chromedp/headless-shell:latest"
 const openrouterApiKey = cfg.requireSecret("openrouterApiKey")
 const openrouterFreeApiKey = cfg.requireSecret("openrouterFreeApiKey")
@@ -349,6 +351,7 @@ const operatorSidecar = [
       { name: "ATTACH_ROUTE_PREFIX", value: ATTACH_ROUTE_PREFIX },
       { name: "ATTACH_SERVICE_PORT", value: String(ATTACH_PORT) },
       { name: "ATTACH_SERVICE_NAME", value: `${APP_NAME}-attach` },
+      { name: "EDITOR_ROUTE_PREFIX", value: EDITOR_ROUTE_PREFIX },
       {
         name: "CF_API_TOKEN",
         valueFrom: {
@@ -414,6 +417,7 @@ export const app = homelab.createExposedWebApp(
     },
     env: [
       { name: "OPENCODE_IMAGE", value: pulumi.output(opencodeImage) },
+      { name: "EDITOR_IMAGE", value: pulumi.output(editorImage) },
       { name: "CHROMIUM_IMAGE", value: chromiumImage },
       { name: "OPENCODE_NAMESPACE", value: NAMESPACE },
       { name: "OPENCODE_PORT", value: String(OPENCODE_PORT) },

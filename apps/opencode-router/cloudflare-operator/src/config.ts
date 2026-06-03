@@ -1,0 +1,119 @@
+function required(name: string): string {
+  const value = process.env[name]
+  if (!value) throw new Error(`Missing required environment variable: ${name}`)
+  return value
+}
+
+export const config = {
+  /** Opencode session container internal port (default opencode serve port) */
+  opencodePort: Number(process.env.OPENCODE_PORT ?? 4096),
+  /** Kubernetes namespace to watch for session pods */
+  watchNamespace: process.env.WATCH_NAMESPACE ?? "opencode-router",
+  /** Label selector identifying session pods */
+  podLabelSelector: process.env.POD_LABEL_SELECTOR ?? "app.kubernetes.io/managed-by=opencode-router",
+  /** Label key holding the 12-char hex session hash */
+  sessionHashLabel: "opencode.ai/session-hash",
+  /** Cloudflare API token (DNS:Edit + Zone:Read) */
+  cfApiToken: required("CF_API_TOKEN"),
+  /** Cloudflare Zone ID */
+  cfZoneId: required("CF_ZONE_ID"),
+  /** Cloudflare Tunnel ID */
+  cfTunnelId: required("CF_TUNNEL_ID"),
+  /** Base domain, e.g. "no-panic.org" */
+  domain: required("DOMAIN"),
+  /** Suffix appended to the hash, e.g. "-oc" → <hash>-oc.<domain> */
+  routeSuffix: process.env.ROUTE_SUFFIX ?? "",
+  /** In-cluster router service URL all session traffic is forwarded to (via Traefik) */
+  routerServiceUrl: required("ROUTER_SERVICE_URL"),
+  /**
+   * Direct in-cluster URL to the router service for admin API calls (bypasses Traefik/oauth2).
+   * Should point directly to the router ClusterIP (e.g. http://code.code.svc.cluster.local:3000).
+   */
+  routerAdminUrl: required("ROUTER_ADMIN_URL"),
+  /** Admin secret for authenticating operator calls to the router API */
+  routerAdminSecret: required("ROUTER_ADMIN_SECRET"),
+  /** Port for the health check HTTP server */
+  healthPort: Number(process.env.HEALTH_PORT ?? 8080),
+  /**
+   * Namespace where IngressRoute resources are created.
+   * Must match the namespace that owns the oauth2 chain middleware.
+   * Defaults to watchNamespace (opencode-router).
+   */
+  ingressRouteNamespace: process.env.INGRESSROUTE_NAMESPACE ?? process.env.WATCH_NAMESPACE ?? "opencode-router",
+  /**
+   * Name of the Traefik Middleware chain that enforces OAuth2 auth.
+   * Created by ExposedWebApp for the main router domain; reused for session routes.
+   * e.g. "opencode-router-oauth2-chain"
+   */
+  oauth2ChainMiddleware: process.env.OAUTH2_CHAIN_MIDDLEWARE ?? "opencode-router-oauth2-chain",
+  /**
+   * Name of the in-cluster Kubernetes Service for the opencode-router.
+   * Session IngressRoutes forward all traffic here; the router then proxies
+   * to the correct pod based on the hash in the hostname.
+   */
+  routerServiceName: process.env.ROUTER_SERVICE_NAME ?? "opencode-router",
+  /**
+   * Prefix used for attach subdomains (must match ATTACH_ROUTE_PREFIX in opencode-router).
+   * e.g. "attach-" → attach-<hash>-oc.<domain>
+   */
+  attachRoutePrefix: process.env.ATTACH_ROUTE_PREFIX ?? "attach-",
+  /**
+   * The Kubernetes Service port that maps to the router's attach port (4096).
+   * The IngressRoute for attach sessions must target this port.
+   */
+  attachServicePort: Number(process.env.ATTACH_SERVICE_PORT ?? 4096),
+  /**
+   * Name of the Kubernetes Service that exposes the router's attach port.
+   * Defaults to "<routerServiceName>-attach" so IngressRoutes can reference it.
+   */
+  attachServiceName: process.env.ATTACH_SERVICE_NAME ?? `${process.env.ROUTER_SERVICE_NAME ?? "opencode-router"}-attach`,
+  /**
+   * Prefix used for editor subdomains (must match EDITOR_ROUTE_PREFIX in opencode-router).
+   * e.g. "editor-" → editor-<hash>-oc.<domain>
+   * If not set, editor routes are not created (backward compatible).
+   */
+  editorRoutePrefix: process.env.EDITOR_ROUTE_PREFIX ?? undefined,
+}
+
+/** Compute the public hostname for a given session hash */
+export function sessionHostname(hash: string): string {
+  return `${hash}${config.routeSuffix}.${config.domain}`
+}
+
+/**
+ * Compute the public attach hostname for a session hash.
+ * e.g., hash="abc123def456" → "attach-abc123def456-oc.no-panic.org"
+ */
+export function sessionAttachHostname(hash: string): string {
+  return `${config.attachRoutePrefix}${hash}${config.routeSuffix}.${config.domain}`
+}
+
+/**
+ * Compute the public hostname for a session hash with explicit dev server port.
+ * e.g., hash="abc123def456", port=5173 → "5173-abc123def456-oc.no-panic.org"
+ */
+export function sessionPortHostname(hash: string, port: number): string {
+  return `${port}-${hash}${config.routeSuffix}.${config.domain}`
+}
+
+/**
+ * Compute the public editor hostname for a session hash.
+ * e.g., hash="abc123def456" → "editor-abc123def456-oc.no-panic.org"
+ * Returns null if editorRoutePrefix is not configured.
+ */
+export function sessionEditorHostname(hash: string): string | null {
+  if (!config.editorRoutePrefix) return null
+  return `${config.editorRoutePrefix}${hash}${config.routeSuffix}.${config.domain}`
+}
+
+/**
+ * Allowlist of ports that are automatically exposed as public subdomains.
+ * Can be overridden via DEV_PORT_ALLOWLIST env var (comma-separated).
+ * Covers: Vite (5173/5174), CRA/Next (3000/3001), common HTTP dev (8000/8080/8888), Django (8000), Astro (4321).
+ */
+export const DEV_PORT_ALLOWLIST: ReadonlySet<number> = new Set(
+  (process.env.DEV_PORT_ALLOWLIST ?? "3000,3001,4321,5173,5174,8000,8080,8888")
+    .split(",")
+    .map((p) => Number(p.trim()))
+    .filter((p) => p > 0 && p <= 65535),
+)

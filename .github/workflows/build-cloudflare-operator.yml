@@ -1,0 +1,115 @@
+name: Build opencode-cloudflare-operator image
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+      - feat/move-cloudflare-operator-to-homelab-apps
+    paths:
+      - apps/opencode-router/cloudflare-operator/**
+      - .github/workflows/build-cloudflare-operator.yml
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push image to GHCR"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-operator-npm-${{ hashFiles('apps/opencode-router/cloudflare-operator/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-operator-npm-
+
+      - name: Install dependencies
+        run: |
+          cd apps/opencode-router/cloudflare-operator
+          npm install --ignore-scripts
+
+      - name: Run tests
+        run: |
+          cd apps/opencode-router/cloudflare-operator
+          npm test
+
+      - name: Type check
+        run: |
+          cd apps/opencode-router/cloudflare-operator
+          npm run typecheck
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/opencode-cloudflare-operator
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get version from package.json
+        id: version
+        run: |
+          VERSION=$(node -p "require('./apps/opencode-router/cloudflare-operator/package.json').version")
+          SHA_SHORT=${GITHUB_SHA::7}
+          # Sanitize branch name for Docker tag (replace / with -)
+          SAFE_REF_NAME=${GITHUB_REF_NAME//\//-}
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${VERSION}-${SAFE_REF_NAME}.${SHA_SHORT}" >> $GITHUB_OUTPUT
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/opencode-router/cloudflare-operator
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}
+            ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Output image tag
+        run: echo "Built and pushed ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}"
+
+      - name: Update Pulumi stack config with new image tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          for i in 1 2 3; do
+            git pull --rebase origin ${{ github.ref_name }}
+            yq e '.config["code:cfOperatorImage"] = "${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}"' \
+              -i apps/opencode-router/Pulumi.dev.yaml
+            git add apps/opencode-router/Pulumi.dev.yaml
+            git diff --cached --quiet && break
+            git commit -m "chore(deploy): update cfOperatorImage to ${{ steps.version.outputs.tag }}"
+            git push && break || git reset HEAD~1
+          done
