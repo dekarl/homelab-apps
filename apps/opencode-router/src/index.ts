@@ -344,7 +344,13 @@ const historyPvc = new k8s.core.v1.PersistentVolumeClaim(
       },
     },
   },
-  { dependsOn: [ns] },
+  {
+    dependsOn: [ns],
+    // longhorn-persistent uses WaitForFirstConsumer binding mode: the PVC stays
+    // Pending until a pod mounts it. Skip Pulumi's readiness wait so the
+    // deployment (first consumer) can be created and trigger provisioning.
+    customTimeouts: { create: "1s" },
+  },
 )
 
 // ---------------------------------------------------------------------------
