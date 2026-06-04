@@ -64,6 +64,7 @@ const storageSize = cfg.get("storageSize") ?? "2Gi"
 // podEnv: optional multiline .env content injected into session pods via ConfigMap.
 // Operators set arbitrary env vars here (e.g. "WORKFLOW_AGENTS=ade\nOPENCODE_MODEL=...").
 const podEnv = cfg.get("podEnv") ?? ""
+const victoriaMetricsUrl = cfg.get("victoriaMetricsUrl") ?? ""
 const cfApiToken = cloudflareConfig.requireSecret("apiToken")
 
 // ---------------------------------------------------------------------------
@@ -573,6 +574,8 @@ export const app = homelab.createExposedWebApp(
       { name: "OPENCODE_ROUTER_EXTERNAL_DOMAIN", value: domain },
       // Archive directory for session export JSON files
       { name: "ARCHIVE_DIR", value: "/data/history" },
+      // VictoriaMetrics URL for token metrics push from session pods (also consumed by router itself)
+      ...(victoriaMetricsUrl ? [{ name: "VICTORIA_METRICS_URL", value: victoriaMetricsUrl }] : []),
     ],
     extraVolumes: [
       {
