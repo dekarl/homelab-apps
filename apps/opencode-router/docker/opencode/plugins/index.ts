@@ -80,31 +80,28 @@ async function runStartupReplay(input: Parameters<Plugin>[0]): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Token-metrics — push per-step token usage to VictoriaMetrics
+// Token-metrics — push token usage to VictoriaMetrics
+//
+// Listens on message.updated (role=assistant) which fires for ALL providers
+// after all steps complete and carries tokens, cost, modelID & providerID
+// directly on the message object — no cache needed.
 // ---------------------------------------------------------------------------
 
 const VM_URL = process.env.VICTORIA_METRICS_URL
 const USER_EMAIL = process.env.OPENCODE_USER_EMAIL ?? "unknown"
 
-// Cache model info per messageID from chat.message hook
-// Map: messageID → { providerID, modelID }
-const messageModelCache = new Map<string, { providerID: string; modelID: string }>()
-
-function pushMetricsToVM(part: Record<string, any>): void {
+function pushMetricsToVM(opts: {
+  tokens: { input: number; output: number; cache?: { read: number; write: number } }
+  cost: number
+  modelID: string
+  providerID: string
+  sessionID: string
+}): void {
   if (!VM_URL) return
 
-  if (part.type !== "step-finish") return
+  const { tokens, cost, modelID, providerID, sessionID } = opts
 
-  const tokens = part.tokens ?? {}
-  const cost = part.cost ?? 0
-
-  // Look up model from the cache populated by chat.message hook
-  const modelInfo = messageModelCache.get(part.messageID)
-  const provider = modelInfo?.providerID ?? "unknown"
-  const model = modelInfo?.modelID ?? "unknown"
-  const session: string = part.sessionID ?? "unknown"
-
-  const labels = `user="${USER_EMAIL}",model="${model}",provider="${provider}",session="${session}"`
+  const labels = `user="${USER_EMAIL}",model="${modelID}",provider="${providerID}",session="${sessionID}"`
   const lines = [
     `opencode_tokens_input_total{${labels}} ${tokens.input ?? 0}`,
     `opencode_tokens_output_total{${labels}} ${tokens.output ?? 0}`,
@@ -148,7 +145,19 @@ const RouterPlugin: Plugin = async (input) => {
       }
       if (e.type === "message.updated") {
         const info = e.properties?.info
-        if (info?.id && info?.role) messageRoles.set(info.id, info.role)
+        if (info?.id && info?.role) {
+          messageRoles.set(info.id, info.role)
+          // Token-metrics: push for assistant messages with real token data
+          if (info.role === "assistant" && (info.tokens?.input > 0 || info.tokens?.output > 0)) {
+            pushMetricsToVM({
+              tokens: info.tokens,
+              cost: info.cost ?? 0,
+              modelID: info.modelID ?? "unknown",
+              providerID: info.providerID ?? "unknown",
+              sessionID: info.sessionID ?? "unknown",
+            })
+          }
+        }
       }
       if (e.type === "message.part.updated") {
         const part = e.properties?.part
@@ -166,8 +175,6 @@ const RouterPlugin: Plugin = async (input) => {
             })
           }
         }
-        // Token-metrics: push per-step token usage to VictoriaMetrics
-        pushMetricsToVM(part)
       }
     },
     "experimental.text.complete": async (inp, output) => {
@@ -181,15 +188,9 @@ const RouterPlugin: Plugin = async (input) => {
         time: Date.now(),
       })
     },
-    "chat.message": async (inp) => {
-      // Cache model info per messageID so step-finish metrics can include model/provider labels
-      if (inp.messageID && inp.model) {
-        messageModelCache.set(inp.messageID, {
-          providerID: inp.model.providerID,
-          modelID: inp.model.modelID,
-        })
-      }
-    },
+    // chat.message hook intentionally omitted — model info for metrics is now
+    // read directly from the message.updated event (role=assistant), which
+    // carries tokens, cost, modelID & providerID on the message object itself.
   }
 }
 
