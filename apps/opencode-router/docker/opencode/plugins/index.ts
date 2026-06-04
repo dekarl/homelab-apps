@@ -82,13 +82,19 @@ async function runStartupReplay(input: Parameters<Plugin>[0]): Promise<void> {
 // ---------------------------------------------------------------------------
 // Token-metrics — push token usage to VictoriaMetrics
 //
-// Listens on message.updated (role=assistant) which fires for ALL providers
-// after all steps complete and carries tokens, cost, modelID & providerID
-// directly on the message object — no cache needed.
+// Uses TWO event sources:
+//   1. message.updated (role=assistant) — has modelID, providerID AND tokens/cost
+//      Only pushes when tokens > 0 to avoid overwriting with 0-token creation events.
+//   2. step-finish parts — has tokens/cost but NO model info.
+//      Uses a model cache populated from message.updated creation events.
 // ---------------------------------------------------------------------------
 
 const VM_URL = process.env.VICTORIA_METRICS_URL
 const USER_EMAIL = process.env.OPENCODE_USER_EMAIL ?? "unknown"
+
+// Cache model info per messageID from message.updated creation events (tokens=0).
+// step-finish parts look up model/provider from this cache.
+const messageModelCache = new Map<string, { providerID: string; modelID: string }>()
 
 function pushMetricsToVM(opts: {
   tokens: { input: number; output: number; cache?: { read: number; write: number } }
@@ -147,29 +153,21 @@ const RouterPlugin: Plugin = async (input) => {
         const info = e.properties?.info
         if (info?.id && info?.role) {
           messageRoles.set(info.id, info.role)
-          // DEBUG: log event structure for assistant messages
-          if (info.role === "assistant") {
-            console.log("[opencode-router-plugin] message.updated role=assistant", JSON.stringify({
-              hasTokens: !!info.tokens,
-              tokensInput: info.tokens?.input,
-              tokensOutput: info.tokens?.output,
-              cost: info.cost,
-              modelID: info.modelID,
-              providerID: info.providerID,
-              sessionID: info.sessionID ?? e.properties?.sessionID,
-            }))
-          }
-          // Token-metrics: push for assistant messages with token data
-          // (tokens may be 0 on the initial creation event; the final
-          // message.updated after steps complete carries the real values)
-          if (info.role === "assistant" && info.tokens && typeof info.tokens.input === "number") {
-            pushMetricsToVM({
-              tokens: info.tokens,
-              cost: info.cost ?? 0,
-              modelID: info.modelID ?? "unknown",
-              providerID: info.providerID ?? "unknown",
-              sessionID: info.sessionID ?? "unknown",
-            })
+          if (info.role === "assistant" && info.tokens) {
+            // Cache model info from creation event (tokens=0) for step-finish fallback
+            if (info.tokens.input === 0 && info.tokens.output === 0 && info.modelID && info.providerID) {
+              messageModelCache.set(info.id, { providerID: info.providerID, modelID: info.modelID })
+            }
+            // Push metrics for final event (tokens > 0) — skip 0-token creation events
+            if ((info.tokens.input > 0 || info.tokens.output > 0)) {
+              pushMetricsToVM({
+                tokens: info.tokens,
+                cost: info.cost ?? 0,
+                modelID: info.modelID ?? "unknown",
+                providerID: info.providerID ?? "unknown",
+                sessionID: info.sessionID ?? "unknown",
+              })
+            }
           }
         }
       }
@@ -188,6 +186,17 @@ const RouterPlugin: Plugin = async (input) => {
               time: e.properties?.time ?? Date.now(),
             })
           }
+        }
+        // Fallback: push step-finish metrics using model info from message.updated cache
+        if (part?.type === "step-finish") {
+          const modelInfo = messageModelCache.get(part.messageID)
+          pushMetricsToVM({
+            tokens: part.tokens ?? {},
+            cost: part.cost ?? 0,
+            modelID: modelInfo?.modelID ?? "unknown",
+            providerID: modelInfo?.providerID ?? "unknown",
+            sessionID: part.sessionID ?? "unknown",
+          })
         }
       }
     },
