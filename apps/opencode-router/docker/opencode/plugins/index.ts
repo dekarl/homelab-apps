@@ -147,8 +147,22 @@ const RouterPlugin: Plugin = async (input) => {
         const info = e.properties?.info
         if (info?.id && info?.role) {
           messageRoles.set(info.id, info.role)
-          // Token-metrics: push for assistant messages with real token data
-          if (info.role === "assistant" && (info.tokens?.input > 0 || info.tokens?.output > 0)) {
+          // DEBUG: log event structure for assistant messages
+          if (info.role === "assistant") {
+            console.log("[opencode-router-plugin] message.updated role=assistant", JSON.stringify({
+              hasTokens: !!info.tokens,
+              tokensInput: info.tokens?.input,
+              tokensOutput: info.tokens?.output,
+              cost: info.cost,
+              modelID: info.modelID,
+              providerID: info.providerID,
+              sessionID: info.sessionID ?? e.properties?.sessionID,
+            }))
+          }
+          // Token-metrics: push for assistant messages with token data
+          // (tokens may be 0 on the initial creation event; the final
+          // message.updated after steps complete carries the real values)
+          if (info.role === "assistant" && info.tokens && typeof info.tokens.input === "number") {
             pushMetricsToVM({
               tokens: info.tokens,
               cost: info.cost ?? 0,

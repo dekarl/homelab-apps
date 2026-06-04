@@ -22,6 +22,7 @@ on:
 permissions:
   contents: write
   packages: write
+  actions: write   # trigger the deploy workflow after a successful build
 
 env:
   IMAGE_NAME: ghcr.io/digitaleraluhut/opencode
@@ -78,3 +79,10 @@ jobs:
             git commit -m "chore(deploy): update opencodeImage to ${{ steps.version.outputs.tag }}"
             git push && break || git reset HEAD~1
           done
+
+      - name: Trigger deploy workflow
+        run: |
+          echo "Triggering deploy workflow for commit $(git rev-parse HEAD)"
+          gh workflow run deploy-opencode-router.yml --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
