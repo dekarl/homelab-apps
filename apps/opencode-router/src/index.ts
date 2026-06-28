@@ -65,6 +65,9 @@ const storageSize = cfg.get("storageSize") ?? "2Gi"
 // Operators set arbitrary env vars here (e.g. "WORKFLOW_AGENTS=ade\nOPENCODE_MODEL=...").
 const podEnv = cfg.get("podEnv") ?? ""
 const victoriaMetricsUrl = cfg.get("victoriaMetricsUrl") ?? ""
+const modelThinking = cfg.get("modelThinking") ?? "opencode/nemotron-3-ultra-free"
+const modelCoding = cfg.get("modelCoding") ?? "flinker/qwen3.6-35b-a3b"
+const modelResearch = cfg.get("modelResearch") ?? "opencode/deepseek-v4-flash-free"
 const cfApiToken = cloudflareConfig.requireSecret("apiToken")
 
 // ---------------------------------------------------------------------------
@@ -576,6 +579,10 @@ export const app = homelab.createExposedWebApp(
       { name: "ARCHIVE_DIR", value: "/data/history" },
       // VictoriaMetrics URL for token metrics push from session pods (also consumed by router itself)
       ...(victoriaMetricsUrl ? [{ name: "VICTORIA_METRICS_URL", value: victoriaMetricsUrl }] : []),
+      // Capability-aware model routing — router injects these into pod init scripts
+      { name: "OPENCODE_MODEL_THINKING", value: modelThinking },
+      { name: "OPENCODE_MODEL_CODING", value: modelCoding },
+      { name: "OPENCODE_MODEL_RESEARCH", value: modelResearch },
     ],
     extraVolumes: [
       {

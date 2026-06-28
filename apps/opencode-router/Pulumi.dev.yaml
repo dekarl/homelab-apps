@@ -12,6 +12,9 @@ config:
   code:podEnv: "WORKFLOW_AGENTS=workflow\nVICTORIA_METRICS_URL=http://victoria-metrics-server.observability.svc.cluster.local:8428"
   code:victoriaMetricsUrl: "http://victoria-metrics-server.observability.svc.cluster.local:8428"
   code:storageSize: 10Gi
+  code:modelThinking: opencode/nemotron-3-ultra-free
+  code:modelCoding: flinker/qwen3.6-35b-a3b
+  code:modelResearch: opencode/deepseek-v4-flash-free
   oauth2-proxy:developersCookieSecret:
     secure: AAABAIUy8CGBs6CCNVgfaLAVs6Qe1U8TylhNtI9fu0db9LqKUptsIke6XkjitlF48BWj+RdY3xAA5YVLUwfOq0T70mrjgRPIXx5OGQ==
   code:adminSecret:
