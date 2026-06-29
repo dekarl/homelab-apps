@@ -1,5 +1,5 @@
 config:
-  code:routerImage: ghcr.io/mrsimpson/opencode-router:0.0.1-main.2bebae1
+  code:routerImage: ghcr.io/mrsimpson/opencode-router:0.0.1-main.7ad52f9
   code:cfOperatorImage: ghcr.io/digitaleraluhut/opencode-cloudflare-operator:0.1.0-main.5ff44c2
   code:opencodeImage: ghcr.io/digitaleraluhut/opencode:homelab-main.0d87ef1
   code:homelabStack: mrsimpson/homelab/dev
