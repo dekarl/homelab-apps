@@ -31,14 +31,14 @@ net.Server.prototype.listen = function (...args) {
     if (typeof host !== "string" || isLoopback(host)) {
       // Remove the host argument (or insert 0.0.0.0 in its place)
       const rest = typeof host === "string" ? args.slice(2) : args.slice(1);
-      return orig.call(this, first, "0.0.0.0", ...rest);
+      return orig.call(this, first, "::", ...rest);
     }
   }
 
   // listen({ port, host, ... }) options-object form
   if (first && typeof first === "object" && !Array.isArray(first) && first.port != null) {
     if (!first.host || isLoopback(first.host)) {
-      args[0] = { ...first, host: "0.0.0.0" };
+      args[0] = { ...first, host: "::" };
     }
   }
 
@@ -46,5 +46,5 @@ net.Server.prototype.listen = function (...args) {
 };
 
 function isLoopback(host) {
-  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "::";
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
 }
