@@ -54,7 +54,7 @@ jobs:
           docker build \
             --build-arg BASE_VERSION=${{ steps.version.outputs.base }} \
             --file apps/opencode-router/docker/opencode/Dockerfile \
-            --label "org.opencontainers.image.source=${{ env.GITHUB_SERVER_URL }}/${{ env.GITHUB_REPOSITORY }}/blob/${{ env.GITHUB_REF_NAME }}/apps/opencode-router/docker/opencode/Dockerfile" \
+            --label "org.opencontainers.image.source=https://github.com/dekarl/homelab-apps" \
             -t ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }} \
             -t ${{ env.IMAGE_NAME }}:latest \
             apps/opencode-router/docker
