@@ -25,7 +25,7 @@ permissions:
   actions: write   # trigger the deploy workflow after a successful build
 
 env:
-  IMAGE_NAME: ghcr.io/digitaleraluhut/opencode
+  IMAGE_NAME: ghcr.io/dekarl/opencode
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
       - name: Login to GHCR
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
-            -u ${{ github.repository_owner }} --password-stdin
+            -u docker --password-stdin
 
       - name: Compute image tag
         id: version
@@ -54,6 +54,7 @@ jobs:
           docker build \
             --build-arg BASE_VERSION=${{ steps.version.outputs.base }} \
             --file apps/opencode-router/docker/opencode/Dockerfile \
+            --label "org.opencontainers.image.source=https://github.com/dekarl/homelab-apps" \
             -t ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }} \
             -t ${{ env.IMAGE_NAME }}:latest \
             apps/opencode-router/docker
